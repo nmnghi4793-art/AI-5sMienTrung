@@ -147,7 +147,7 @@ def main():
     schedule_jobs(application)
 
     print("Bot is running...")
-    await application.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
