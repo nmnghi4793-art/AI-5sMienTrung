@@ -46,9 +46,10 @@ def load_required_excel(path: str):
     return req
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot online. Định dạng:
-<ID Kho> - <Tên Kho>\nNgày: dd/mm/yyyy (tuỳ chọn)
-Sau đó gửi ảnh trong 5 giây.")
+    await update.message.reply_text("""Bot online. Định dạng:
+<ID Kho> - <Tên Kho>
+Ngày: dd/mm/yyyy (tuỳ chọn)
+Sau đó gửi ảnh trong 5 giây.""")
 
 def parse_kho_from_text(text: str):
     lines = [l for l in text.splitlines() if l.strip()]
