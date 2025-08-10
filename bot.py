@@ -133,7 +133,7 @@ async def schedule_jobs(app: Application):
     from datetime import time as dtime
     app.job_queue.run_daily(job_chot, time=dtime(hour=CHOT_HOUR, minute=CHOT_MINUTE, tzinfo=TZ), name="job_chot")
 
-async def main():
+def main():
     global REQUIRED
     if not BOT_TOKEN:
         raise RuntimeError("Missing BOT_TOKEN env var")
@@ -150,4 +150,5 @@ async def main():
     await application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
+
