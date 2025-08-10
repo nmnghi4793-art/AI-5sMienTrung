@@ -144,7 +144,7 @@ def main():
     application.add_handler(MessageHandler(filters.PHOTO & (~filters.COMMAND), on_photo))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), on_text))
 
-    await schedule_jobs(application)
+    schedule_jobs(application)
 
     print("Bot is running...")
     await application.run_polling(allowed_updates=Update.ALL_TYPES)
