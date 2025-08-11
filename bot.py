@@ -21,8 +21,7 @@ SUBMIT_DB_PATH = "submissions.json"           # lưu ID đã nộp theo ngày
 TZ = ZoneInfo("Asia/Ho_Chi_Minh")             # múi giờ VN
 REPORT_HOUR = 21                              # 21:00 hằng ngày
 TEXT_PAIR_TIMEOUT = 120                       # giây giữ caption dùng chung
-# ENV bắt buộc: BOT_TOKEN
-# ENV tuỳ chọn: REPORT_CHAT_IDS="-100111,-100222"
+# ENV: BOT_TOKEN (bắt buộc), REPORT_CHAT_IDS="-100111,-100222" (tuỳ chọn)
 
 # ========= JSON UTILS =========
 def _load_json(path: str, default):
@@ -137,7 +136,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "*Cú pháp linh hoạt* (chỉ cần *có ID* trong caption):\n"
         "`<ID_KHO> - <Tên kho>`\n"
         "`Ngày: dd/mm/yyyy` *(tuỳ chọn)*\n\n"
-        "➡️ Cách nhanh để dùng 1 caption cho nhiều ảnh:\n"
+        "➡️ Dùng 1 caption cho nhiều ảnh:\n"
         "  1) Gửi 1 tin nhắn text chứa ID/Ngày\n"
         "  2) Gửi nhiều ảnh liên tiếp (không cần caption) — bot sẽ áp cùng caption trong 2 phút."
     )
@@ -145,6 +144,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_start(update, context)
+
+# NEW: /chatid để lấy chat id nhóm/PM
+async def chatid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(str(update.effective_chat.id))
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
@@ -158,7 +161,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "ngày" in text.lower() or any(ch.isdigit() for ch in text):
             await update.message.reply_text(
                 "⚠️ Cú pháp chưa rõ ID. Vui lòng *gửi ảnh kèm caption có ID kho* hoặc gửi text trước rồi gửi ảnh trong 2 phút.\n"
-                "Ví dụ:\n`12345 - Kho ABC\\nNgày: 11/08/2025`",
+                "Ví dụ:\n`12345 - Kho ABC\nNgày: 11/08/2025`",
                 parse_mode=ParseMode.MARKDOWN
             )
         return
@@ -280,12 +283,12 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
 
     missing = get_missing_ids_for_day(kho_map, submit_db, today)
     if not missing:
-        text = f"📢 *BÁO CÁO {today.strftime('%d/%m/%Y')}*\nTất cả kho đã nộp đủ ✅"
+        text = f"📢 *BÁO CÁO 5S - {today.strftime('%d/%m/%Y')}*\nTất cả kho đã báo cáo 5S đủ ✅"
     else:
         lines = [f"- `{mid}`: {kho_map[mid]}" for mid in missing]
         text = (
-            f"📢 *BÁO CÁO {today.strftime('%d/%m/%Y')}*\n"
-            f"Chưa nhận ảnh từ {len(missing)} kho:\n" + "\n".join(lines)
+            f"📢 *BÁO CÁO 5S - {today.strftime('%d/%m/%Y')}*\n"
+            f"Chưa nhận ảnh 5S từ {len(missing)} kho:\n" + "\n".join(lines)
         )
 
     for cid in chat_ids:
@@ -305,6 +308,7 @@ def build_app() -> Application:
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("chatid", chatid))  # NEW: lấy chat id
     app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, photo_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
