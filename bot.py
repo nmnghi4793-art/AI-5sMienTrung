@@ -15,17 +15,15 @@ from telegram.ext import (
 )
 
 # ========= CẤU HÌNH =========
-EXCEL_PATH = "danh_sach_nv_theo_id_kho.xlsx"  # Excel cần cột: id_kho, ten_kho
-HASH_DB_PATH = "hashes.json"                  # nơi lưu hash ảnh đã nhận (để phát hiện ảnh trùng)
-SUBMIT_DB_PATH = "submissions.json"           # nơi lưu lịch sử ID đã nộp theo ngày
+EXCEL_PATH = "danh_sach_nv_theo_id_kho.xlsx"  # Excel: cột id_kho, ten_kho
+HASH_DB_PATH = "hashes.json"                  # lưu hash ảnh (phát hiện trùng)
+SUBMIT_DB_PATH = "submissions.json"           # lưu ID đã nộp theo ngày
 TZ = ZoneInfo("Asia/Ho_Chi_Minh")             # múi giờ VN
-REPORT_HOUR = 21                              # 21:00 hằng ngày (cố định)
-# Env bắt buộc:
-#   BOT_TOKEN
-# Env tuỳ chọn:
-#   REPORT_CHAT_IDS = "-100111,-100222"  (danh sách chat ID nhận báo cáo 21:00, ngăn cách bởi dấu phẩy)
+REPORT_HOUR = 21                              # 21:00 hằng ngày
+# ENV bắt buộc: BOT_TOKEN
+# ENV tuỳ chọn: REPORT_CHAT_IDS="-100111,-100222"
 
-# ========= TIỆN ÍCH LƯU/TRUY =========
+# ========= JSON UTILS =========
 def _load_json(path: str, default):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -51,7 +49,7 @@ def load_submit_db():
 def save_submit_db(db):
     _save_json(SUBMIT_DB_PATH, db)
 
-# ========= ĐỌC DANH SÁCH KHO =========
+# ========= KHO MAP =========
 def load_kho_map():
     df = pd.read_excel(EXCEL_PATH)
     cols = {c.lower().strip(): c for c in df.columns}
@@ -63,31 +61,26 @@ def load_kho_map():
     df[ten_col] = df[ten_col].astype(str).str.strip()
     return dict(zip(df[id_col], df[ten_col]))
 
-# ========= PARSER CÚ PHÁP =========
-ID_PATTERN = re.compile(r"(\d{1,10})")  # ID: 1..10 chữ số
-DATE_PATTERN = re.compile(
-    r"(?:ngày|date|ngay)\s*[:\-]?\s*(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})",
-    re.IGNORECASE
-)
+# ========= PARSE TEXT =========
+ID_RX = re.compile(r"(\d{1,10})")
+DATE_RX = re.compile(r"(?:ngày|date|ngay)\s*[:\-]?\s*(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})", re.IGNORECASE)
 
 def parse_text_for_id_and_date(text: str):
-    """Chấp nhận linh hoạt: có ID là được; ngày (tuỳ chọn) dạng 'Ngày: dd/mm/yyyy'."""
+    """Có ID là được; ngày (tuỳ chọn) 'Ngày: dd/mm/yyyy'."""
     _id = None
     _date = date.today()
-
     if not text:
         return None, _date
 
-    m_id = ID_PATTERN.search(text)
+    m_id = ID_RX.search(text)
     if m_id:
         _id = m_id.group(1)
 
-    m_d = DATE_PATTERN.search(text)
+    m_d = DATE_RX.search(text)
     if m_d:
         d, m, y = m_d.groups()
         d, m, y = int(d), int(m), int(y)
-        if y < 100:  # 25 -> 2025
-            y += 2000
+        if y < 100: y += 2000
         try:
             _date = date(y, m, d)
         except Exception:
@@ -95,7 +88,7 @@ def parse_text_for_id_and_date(text: str):
 
     return _id, _date
 
-# ========= HASH ẢNH =========
+# ========= ẢNH & HASH =========
 async def get_file_bytes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bytes:
     photo = update.message.photo[-1]  # ảnh lớn nhất
     tg_file = await context.bot.get_file(photo.file_id)
@@ -103,17 +96,17 @@ async def get_file_bytes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return bytes(b)
 
 def hash_bytes(b: bytes) -> str:
-    return hashlib.md5(b).hexdigest()  # đủ để phát hiện trùng 100% file
+    return hashlib.md5(b).hexdigest()  # phát hiện trùng 100% file
 
 def find_duplicates(hash_db, h: str):
-    """Trả về toàn bộ bản ghi có cùng hash (để liệt kê lịch sử trùng)."""
+    """Trả về tất cả bản ghi có cùng hash (để liệt kê lịch sử trùng)."""
     return [item for item in hash_db["items"] if item.get("hash") == h]
 
 def add_hash_record(hash_db, h: str, info: dict):
     # info: { "ts": "...", "chat_id": ..., "user_id": ..., "id_kho": ..., "date": "YYYY-MM-DD" }
     hash_db["items"].append({"hash": h, **info})
 
-# ========= GHI NHẬN NỘP =========
+# ========= SUBMISSION =========
 def mark_submitted(submit_db, id_kho: str, d: date):
     key = d.isoformat()
     lst = submit_db.get(key, [])
@@ -137,13 +130,11 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_start(update, context)
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Nhận text: nhắc nhẹ nếu có vẻ đang báo cáo bằng text."""
     text = (update.message.text or "").strip()
     id_kho, d = parse_text_for_id_and_date(text)
     kho_map = context.bot_data["kho_map"]
 
     if not id_kho:
-        # chỉ nhắc khi có số/ngày trong tin nhắn (tránh làm phiền chat thường)
         if "ngày" in text.lower() or any(ch.isdigit() for ch in text):
             await update.message.reply_text(
                 "⚠️ Cú pháp chưa rõ ID. Vui lòng *gửi ảnh kèm caption có ID kho*. Ví dụ:\n"
@@ -168,7 +159,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     caption = (msg.caption or "").strip()
-
     id_kho, d = parse_text_for_id_and_date(caption)
     kho_map = context.bot_data["kho_map"]
 
@@ -191,7 +181,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     b = await get_file_bytes(update, context)
     h = hash_bytes(b)
 
-    # kiểm tra ảnh trùng (liệt kê *toàn bộ* lịch sử trùng nếu có)
+    # kiểm tra ảnh trùng → liệt kê toàn bộ lịch sử
     hash_db = load_hash_db()
     dups = find_duplicates(hash_db, h)
     if dups:
