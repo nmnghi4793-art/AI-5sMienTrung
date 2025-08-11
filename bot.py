@@ -1,150 +1,298 @@
-
+# bot.py
 import os
 import re
-import logging
-from datetime import time as dtime
+import json
+import hashlib
+from datetime import datetime, date, time as dtime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 from telegram import Update
+from telegram.constants import ParseMode
 from telegram.ext import (
-    ApplicationBuilder,
-    MessageHandler,
-    CommandHandler,
-    ContextTypes,
-    filters,
+    ApplicationBuilder, Application, CommandHandler, MessageHandler,
+    ContextTypes, filters
 )
 
-# ===== CONFIG =====
-TZ_NAME = os.getenv("TZ_NAME", "Asia/Ho_Chi_Minh")
-TZ = ZoneInfo(TZ_NAME)
+# ========= CẤU HÌNH =========
+EXCEL_PATH = "danh_sach_nv_theo_id_kho.xlsx"  # Excel cần cột: id_kho, ten_kho
+HASH_DB_PATH = "hashes.json"                  # nơi lưu hash ảnh đã nhận (để phát hiện ảnh trùng)
+SUBMIT_DB_PATH = "submissions.json"           # nơi lưu lịch sử ID đã nộp theo ngày
+TZ = ZoneInfo("Asia/Ho_Chi_Minh")             # múi giờ VN
+REPORT_HOUR = 21                              # 21:00 hằng ngày (cố định)
+# Env bắt buộc:
+#   BOT_TOKEN
+# Env tuỳ chọn:
+#   REPORT_CHAT_IDS = "-100111,-100222"  (danh sách chat ID nhận báo cáo 21:00, ngăn cách bởi dấu phẩy)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")           # set trong Railway
-EXCEL_PATH = os.getenv("EXCEL_PATH", "danh_sach_nv_theo_id_kho.xlsx")
-GROUP_ID = os.getenv("GROUP_ID")             # "-100xxxxxxxxxx" (string) - tuỳ chọn
+# ========= TIỆN ÍCH LƯU/TRUY =========
+def _load_json(path: str, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
 
-CHOT_HOUR = int(os.getenv("CHOT_HOUR", "21"))
-CHOT_MINUTE = int(os.getenv("CHOT_MINUTE", "0"))
+def _save_json(path: str, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
 
-# ===== LOGGING =====
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
+def load_hash_db():
+    return _load_json(HASH_DB_PATH, {"items": []})
+
+def save_hash_db(db):
+    _save_json(HASH_DB_PATH, db)
+
+def load_submit_db():
+    return _load_json(SUBMIT_DB_PATH, {})  # { "YYYY-MM-DD": ["id1","id2",...] }
+
+def save_submit_db(db):
+    _save_json(SUBMIT_DB_PATH, db)
+
+# ========= ĐỌC DANH SÁCH KHO =========
+def load_kho_map():
+    df = pd.read_excel(EXCEL_PATH)
+    cols = {c.lower().strip(): c for c in df.columns}
+    if "id_kho" not in cols or "ten_kho" not in cols:
+        raise RuntimeError("Excel phải có cột 'id_kho' và 'ten_kho'")
+    id_col = cols["id_kho"]; ten_col = cols["ten_kho"]
+    df = df[[id_col, ten_col]].dropna()
+    df[id_col] = df[id_col].astype(str).str.strip()
+    df[ten_col] = df[ten_col].astype(str).str.strip()
+    return dict(zip(df[id_col], df[ten_col]))
+
+# ========= PARSER CÚ PHÁP =========
+ID_PATTERN = re.compile(r"(\d{1,10})")  # ID: 1..10 chữ số
+DATE_PATTERN = re.compile(
+    r"(?:ngày|date|ngay)\s*[:\-]?\s*(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})",
+    re.IGNORECASE
 )
-logger = logging.getLogger(__name__)
 
-# ===== STATE =====
-REQUIRED = set()      # set(id_kho)
-KHO_MAP = {}          # id_kho -> ten_kho (normalized)
-REPORTED_TODAY = set()
-SEEN_CHATS = set()
+def parse_text_for_id_and_date(text: str):
+    """Chấp nhận linh hoạt: có ID là được; ngày (tuỳ chọn) dạng 'Ngày: dd/mm/yyyy'."""
+    _id = None
+    _date = date.today()
 
-# Regex “thoáng”: ID = 2-12 ký tự chữ/số, linh hoạt khoảng trắng quanh dấu '-'
-LINE1_RE = re.compile(r'^\s*(?P<id>[A-Za-z0-9]{2,12})\s*-\s*(?P<name>.+?)\s*$')
+    if not text:
+        return None, _date
 
-def norm_text(s: str) -> str:
-    return ' '.join(str(s).strip().lower().split())
+    m_id = ID_PATTERN.search(text)
+    if m_id:
+        _id = m_id.group(1)
 
-def load_required_excel(path: str):
-    global REQUIRED, KHO_MAP
-    df = pd.read_excel(path)[['id_kho', 'ten_kho']].dropna()
-    df['id_kho'] = df['id_kho'].astype(str).str.strip()
-    df['ten_kho'] = df['ten_kho'].astype(str).str.strip()
-    REQUIRED = set(df['id_kho'].tolist())
-    KHO_MAP = {row['id_kho']: norm_text(row['ten_kho']) for _, row in df.iterrows()}
-    logger.info("Loaded %d kho from %s", len(REQUIRED), path)
+    m_d = DATE_PATTERN.search(text)
+    if m_d:
+        d, m, y = m_d.groups()
+        d, m, y = int(d), int(m), int(y)
+        if y < 100:  # 25 -> 2025
+            y += 2000
+        try:
+            _date = date(y, m, d)
+        except Exception:
+            _date = date.today()
 
+    return _id, _date
+
+# ========= HASH ẢNH =========
+async def get_file_bytes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bytes:
+    photo = update.message.photo[-1]  # ảnh lớn nhất
+    tg_file = await context.bot.get_file(photo.file_id)
+    b = await tg_file.download_as_bytearray()
+    return bytes(b)
+
+def hash_bytes(b: bytes) -> str:
+    return hashlib.md5(b).hexdigest()  # đủ để phát hiện trùng 100% file
+
+def find_duplicates(hash_db, h: str):
+    """Trả về toàn bộ bản ghi có cùng hash (để liệt kê lịch sử trùng)."""
+    return [item for item in hash_db["items"] if item.get("hash") == h]
+
+def add_hash_record(hash_db, h: str, info: dict):
+    # info: { "ts": "...", "chat_id": ..., "user_id": ..., "id_kho": ..., "date": "YYYY-MM-DD" }
+    hash_db["items"].append({"hash": h, **info})
+
+# ========= GHI NHẬN NỘP =========
+def mark_submitted(submit_db, id_kho: str, d: date):
+    key = d.isoformat()
+    lst = submit_db.get(key, [])
+    if id_kho not in lst:
+        lst.append(id_kho)
+    submit_db[key] = lst
+
+# ========= HANDLERS =========
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = (
+        "✅ Bot sẵn sàng!\n\n"
+        "*Cú pháp linh hoạt* (chỉ cần *có ID* trong caption):\n"
+        "`<ID_KHO> - <Tên kho>`\n"
+        "`Ngày: dd/mm/yyyy` *(tuỳ chọn)*\n\n"
+        "➡️ Gửi *ảnh kèm caption* chứa ID (và ngày nếu muốn).\n"
+        "Ví dụ: `12345 - Kho ABC\\nNgày: 11/08/2025`"
+    )
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await cmd_start(update, context)
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Nhận text: nhắc nhẹ nếu có vẻ đang báo cáo bằng text."""
+    text = (update.message.text or "").strip()
+    id_kho, d = parse_text_for_id_and_date(text)
+    kho_map = context.bot_data["kho_map"]
+
+    if not id_kho:
+        # chỉ nhắc khi có số/ngày trong tin nhắn (tránh làm phiền chat thường)
+        if "ngày" in text.lower() or any(ch.isdigit() for ch in text):
+            await update.message.reply_text(
+                "⚠️ Cú pháp chưa rõ ID. Vui lòng *gửi ảnh kèm caption có ID kho*. Ví dụ:\n"
+                "`12345 - Kho ABC\\nNgày: 11/08/2025`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        return
+
+    if id_kho not in kho_map:
+        await update.message.reply_text(
+            f"❌ ID `{id_kho}` *không có* trong danh sách. Kiểm tra lại!",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
     await update.message.reply_text(
-        "Cú pháp:\n<ID Kho> - <Tên Kho>\nVD: DN01 - GXT Đà Nẵng\n"
-        "Gửi kèm ảnh 5S (không cần reply). 21:00 sẽ báo kho chưa báo."
+        f"✅ Đã nhận ID `{id_kho}` ({kho_map[id_kho]}). "
+        f"Vui lòng *gửi ảnh kèm caption này* để xác nhận.",
+        parse_mode=ParseMode.MARKDOWN
     )
 
-def parse_id_from_text(text: str):
-    if not text:
-        return None, None
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        m = LINE1_RE.match(line)
-        if m:
-            id_kho = m.group('id').strip()
-            ten_kho_norm = norm_text(m.group('name'))
-            return id_kho, ten_kho_norm
-    return None, None
+async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    caption = (msg.caption or "").strip()
 
-async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    SEEN_CHATS.add(chat.id)
+    id_kho, d = parse_text_for_id_and_date(caption)
+    kho_map = context.bot_data["kho_map"]
 
-    msg = update.effective_message
-    text = msg.caption or msg.text
-    if not text:
+    if not id_kho:
+        await msg.reply_text(
+            "⚠️ *Thiếu ID kho.* Hãy gửi *ảnh kèm caption* chứa ID. Ví dụ:\n"
+            "`12345 - Kho ABC\\nNgày: 11/08/2025`",
+            parse_mode=ParseMode.MARKDOWN
+        )
         return
 
-    id_kho, ten_norm = parse_id_from_text(text)
-
-    # Chỉ nhắc khi có dấu '-' mà không parse được (tránh làm phiền chat thường)
-    if id_kho is None:
-        if '-' in text:
-            await msg.reply_text("❌ Sai cú pháp.\nMẫu: <ID Kho> - <Tên Kho>\nVD: DN01 - GXT Đà Nẵng")
+    if id_kho not in kho_map:
+        await msg.reply_text(
+            f"❌ ID `{id_kho}` *không có* trong danh sách Excel. Kiểm tra lại!",
+            parse_mode=ParseMode.MARKDOWN
+        )
         return
 
-    if id_kho not in REQUIRED:
-        await msg.reply_text(f"❌ Không có ID kho '{id_kho}' trong danh sách theo dõi.")
+    # tải bytes ảnh & hash
+    b = await get_file_bytes(update, context)
+    h = hash_bytes(b)
+
+    # kiểm tra ảnh trùng (liệt kê *toàn bộ* lịch sử trùng nếu có)
+    hash_db = load_hash_db()
+    dups = find_duplicates(hash_db, h)
+    if dups:
+        lines = []
+        for item in dups:
+            old_date = item.get("date", "?")
+            try:
+                pretty = datetime.fromisoformat(old_date).strftime("%d/%m/%Y")
+            except Exception:
+                pretty = old_date
+            old_id = item.get("id_kho", "?")
+            old_name = kho_map.get(old_id, "(không rõ)")
+            lines.append(f"- Ngày *{pretty}*: `{old_id}` — {old_name}")
+        MAX_SHOW = 10
+        shown = lines[:MAX_SHOW]
+        tail = f"\n… và {len(lines)-MAX_SHOW} lần trùng khác." if len(lines) > MAX_SHOW else ""
+        await msg.reply_text(
+            "⚠️ Ảnh *trùng* với ảnh đã gửi trước đây:\n" + "\n".join(shown) + tail +
+            "\n\n➡️ Vui lòng chụp *ảnh mới* khác để tránh trùng lặp.",
+            parse_mode=ParseMode.MARKDOWN
+        )
         return
 
-    REPORTED_TODAY.add(id_kho)
-    display_name = KHO_MAP.get(id_kho, ten_norm or "")
-    try:
-        await msg.reply_text(f"✅ Đã ghi nhận: {id_kho} - {display_name}")
-    except Exception as e:
-        logger.warning("Reply failed: %s", e)
+    # ghi nhận nộp
+    submit_db = load_submit_db()
+    mark_submitted(submit_db, id_kho, d)
+    save_submit_db(submit_db)
 
-async def job_send_report(context: ContextTypes.DEFAULT_TYPE):
-    missing = sorted(list(REQUIRED - REPORTED_TODAY))
+    # lưu hash (để phát hiện trùng các lần sau)
+    info = {
+        "ts": datetime.now(TZ).isoformat(timespec="seconds"),
+        "chat_id": msg.chat_id,
+        "user_id": msg.from_user.id,
+        "id_kho": id_kho,
+        "date": d.isoformat()
+    }
+    add_hash_record(hash_db, h, info)
+    save_hash_db(hash_db)
+
+    await msg.reply_text(
+        f"✅ Đã ghi nhận ảnh cho *{kho_map[id_kho]}* (ID `{id_kho}`) - Ngày *{d.strftime('%d/%m/%Y')}*.",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+# ========= BÁO CÁO 21:00 =========
+def get_missing_ids_for_day(kho_map, submit_db, d: date):
+    submitted = set(submit_db.get(d.isoformat(), []))
+    all_ids = set(kho_map.keys())
+    return sorted(all_ids - submitted)
+
+async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
+    chat_ids_env = os.getenv("REPORT_CHAT_IDS", "").strip()
+    if not chat_ids_env:
+        return
+    chat_ids = [int(x.strip()) for x in chat_ids_env.split(",") if x.strip()]
+
+    kho_map = context.bot_data["kho_map"]
+    submit_db = load_submit_db()
+    today = datetime.now(TZ).date()
+
+    missing = get_missing_ids_for_day(kho_map, submit_db, today)
     if not missing:
-        report = "✅ Tất cả kho đã có báo cáo 5S hôm nay."
+        text = f"📢 *BÁO CÁO {today.strftime('%d/%m/%Y')}*\nTất cả kho đã nộp đủ ✅"
     else:
-        lines = ["❌ Chưa có báo cáo 5S hôm nay:"]
-        for idk in missing:
-            lines.append(f"- {idk} - {KHO_MAP.get(idk, '')}")
-        report = "\n".join(lines)
+        lines = [f"- `{mid}`: {kho_map[mid]}" for mid in missing]
+        text = (
+            f"📢 *BÁO CÁO {today.strftime('%d/%m/%Y')}*\n"
+            f"Chưa nhận ảnh từ {len(missing)} kho:\n" + "\n".join(lines)
+        )
 
-    targets = set()
-    if GROUP_ID:
-        targets.add(int(GROUP_ID))
-    else:
-        targets |= SEEN_CHATS
-
-    for chat_id in targets:
+    for cid in chat_ids:
         try:
-            await context.bot.send_message(chat_id=chat_id, text=report)
-        except Exception as e:
-            logger.warning("Send report to %s failed: %s", chat_id, e)
+            await context.bot.send_message(cid, text, parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            pass
 
-    REPORTED_TODAY.clear()
+# ========= MAIN =========
+def build_app() -> Application:
+    token = os.getenv("BOT_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("Thiếu biến môi trường BOT_TOKEN")
 
-def schedule_jobs(app):
-    jq = app.job_queue
-    if jq is None:
-        logger.warning("JobQueue is None. Install PTB with [job-queue].")
-        return
-    jq.run_daily(job_send_report, time=dtime(hour=CHOT_HOUR, minute=CHOT_MINUTE, tzinfo=TZ), name="daily_report")
+    app = ApplicationBuilder().token(token).build()
+    app.bot_data["kho_map"] = load_kho_map()
+
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, photo_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+
+    app.job_queue.run_daily(
+        send_daily_report,
+        time=dtime(hour=REPORT_HOUR, minute=0, tzinfo=TZ),
+        name="daily_report_21h"
+    )
+    return app
 
 def main():
-    if not BOT_TOKEN:
-        raise RuntimeError("Missing BOT_TOKEN env var")
-
-    load_required_excel(EXCEL_PATH)
-
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, on_message))
-
-    schedule_jobs(app)
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app = build_app()
+    print("Bot is running...")
+    app.run_polling(close_loop=False)
 
 if __name__ == "__main__":
     main()
