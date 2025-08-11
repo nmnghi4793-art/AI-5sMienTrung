@@ -20,6 +20,7 @@ HASH_DB_PATH = "hashes.json"                  # lưu hash ảnh (phát hiện tr
 SUBMIT_DB_PATH = "submissions.json"           # lưu ID đã nộp theo ngày
 TZ = ZoneInfo("Asia/Ho_Chi_Minh")             # múi giờ VN
 REPORT_HOUR = 21                              # 21:00 hằng ngày
+TEXT_PAIR_TIMEOUT = 120                       # giây giữ caption dùng chung
 # ENV bắt buộc: BOT_TOKEN
 # ENV tuỳ chọn: REPORT_CHAT_IDS="-100111,-100222"
 
@@ -114,6 +115,21 @@ def mark_submitted(submit_db, id_kho: str, d: date):
         lst.append(id_kho)
     submit_db[key] = lst
 
+# ========= GIỮ CAPTION DÙNG CHUNG =========
+_last_text = {}  # chat_id -> (text, ts)
+
+def upsert_last_text(chat_id: int, text: str):
+    _last_text[chat_id] = (text, datetime.now(TZ).timestamp())
+
+def get_last_text(chat_id: int):
+    data = _last_text.get(chat_id)
+    if not data:
+        return None
+    text, ts = data
+    if datetime.now(TZ).timestamp() - ts > TEXT_PAIR_TIMEOUT:
+        return None
+    return text
+
 # ========= HANDLERS =========
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
@@ -121,8 +137,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "*Cú pháp linh hoạt* (chỉ cần *có ID* trong caption):\n"
         "`<ID_KHO> - <Tên kho>`\n"
         "`Ngày: dd/mm/yyyy` *(tuỳ chọn)*\n\n"
-        "➡️ Gửi *ảnh kèm caption* chứa ID (và ngày nếu muốn).\n"
-        "Ví dụ: `12345 - Kho ABC\\nNgày: 11/08/2025`"
+        "➡️ Cách nhanh để dùng 1 caption cho nhiều ảnh:\n"
+        "  1) Gửi 1 tin nhắn text chứa ID/Ngày\n"
+        "  2) Gửi nhiều ảnh liên tiếp (không cần caption) — bot sẽ áp cùng caption trong 2 phút."
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
@@ -131,14 +148,17 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
+    if text:
+        upsert_last_text(update.effective_chat.id, text)  # lưu để áp cho nhiều ảnh
+
     id_kho, d = parse_text_for_id_and_date(text)
     kho_map = context.bot_data["kho_map"]
 
     if not id_kho:
         if "ngày" in text.lower() or any(ch.isdigit() for ch in text):
             await update.message.reply_text(
-                "⚠️ Cú pháp chưa rõ ID. Vui lòng *gửi ảnh kèm caption có ID kho*. Ví dụ:\n"
-                "`12345 - Kho ABC\\nNgày: 11/08/2025`",
+                "⚠️ Cú pháp chưa rõ ID. Vui lòng *gửi ảnh kèm caption có ID kho* hoặc gửi text trước rồi gửi ảnh trong 2 phút.\n"
+                "Ví dụ:\n`12345 - Kho ABC\\nNgày: 11/08/2025`",
                 parse_mode=ParseMode.MARKDOWN
             )
         return
@@ -152,20 +172,36 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"✅ Đã nhận ID `{id_kho}` ({kho_map[id_kho]}). "
-        f"Vui lòng *gửi ảnh kèm caption này* để xác nhận.",
+        f"Bạn có thể gửi *nhiều ảnh liên tiếp* (không cần caption) trong 2 phút, bot sẽ áp cùng caption.",
         parse_mode=ParseMode.MARKDOWN
     )
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
+
+    # ---- ALBUM / MEDIA GROUP ----
     caption = (msg.caption or "").strip()
-    id_kho, d = parse_text_for_id_and_date(caption)
+    caption_from_group = caption
+    mgid = msg.media_group_id
+    if mgid:
+        albums = context.chat_data.setdefault("albums", {})
+        rec = albums.setdefault(mgid, {"caption": None, "ts": datetime.now(TZ).timestamp()})
+        if caption and not rec["caption"]:
+            rec["caption"] = caption
+        if not caption and rec["caption"]:
+            caption_from_group = rec["caption"]
+
+    # ---- FALLBACK: dùng caption đã lưu trong 2 phút cho nhiều ảnh ----
+    if not caption_from_group:
+        caption_from_group = get_last_text(msg.chat_id) or ""
+
+    # parse
+    id_kho, d = parse_text_for_id_and_date(caption_from_group)
     kho_map = context.bot_data["kho_map"]
 
     if not id_kho:
         await msg.reply_text(
-            "⚠️ *Thiếu ID kho.* Hãy gửi *ảnh kèm caption* chứa ID. Ví dụ:\n"
-            "`12345 - Kho ABC\\nNgày: 11/08/2025`",
+            "⚠️ *Thiếu ID kho.* Hãy thêm ID vào caption, hoặc gửi 1 text có ID trước rồi gửi ảnh (trong 2 phút).",
             parse_mode=ParseMode.MARKDOWN
         )
         return
@@ -179,11 +215,11 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # tải bytes ảnh & hash
     b = await get_file_bytes(update, context)
-    h = hash_bytes(b)
+    h = hashlib.md5(b).hexdigest()
 
     # kiểm tra ảnh trùng → liệt kê toàn bộ lịch sử
     hash_db = load_hash_db()
-    dups = find_duplicates(hash_db, h)
+    dups = [item for item in hash_db["items"] if item.get("hash") == h]
     if dups:
         lines = []
         for item in dups:
@@ -210,7 +246,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mark_submitted(submit_db, id_kho, d)
     save_submit_db(submit_db)
 
-    # lưu hash (để phát hiện trùng các lần sau)
+    # lưu hash
     info = {
         "ts": datetime.now(TZ).isoformat(timespec="seconds"),
         "chat_id": msg.chat_id,
@@ -218,7 +254,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "id_kho": id_kho,
         "date": d.isoformat()
     }
-    add_hash_record(hash_db, h, info)
+    hash_db["items"].append({"hash": h, **info})
     save_hash_db(hash_db)
 
     await msg.reply_text(
