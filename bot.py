@@ -2,10 +2,14 @@
 import os
 import re
 import logging
-from datetime import time as dtime
+import json
+from datetime import time as dtime, datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from PIL import Image
+import io
+import imagehash
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -32,6 +36,63 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+
+# ===== DUPLICATE DETECTION STORAGE (with sender & date) =====
+DUP_STORAGE = os.getenv("DUP_STORAGE", "seen_images.json")
+PHASH_THRESHOLD = int(os.getenv("PHASH_THRESHOLD", "8"))
+
+def _load_seen():
+    try:
+        with open(DUP_STORAGE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_seen(data):
+    try:
+        with open(DUP_STORAGE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("Cannot save seen storage: %s", e)
+
+def _today_key():
+    return datetime.now(TZ).strftime("%Y-%m-%d")
+
+def _find_duplicate_info(kho_id: str, file_uid: str, phash_hex: str):
+    data = _load_seen()
+    # Search all days to find when it was first seen
+    try:
+        from imagehash import hex_to_hash
+        h_new = hex_to_hash(phash_hex) if phash_hex else None
+    except Exception:
+        h_new = None
+
+    for day, dday in data.items():
+        bucket = dday.get(kho_id, {})
+        for rec in bucket.get("uids", []):
+            if file_uid and rec.get("uid") == file_uid:
+                return True, day, rec.get("sender")
+        if h_new and "phash" in bucket:
+            for rec in bucket["phash"]:
+                try:
+                    if rec.get("hex") and (h_new - hex_to_hash(rec["hex"]) <= PHASH_THRESHOLD):
+                        return True, day, rec.get("sender")
+                except Exception:
+                    continue
+    return False, None, None
+
+def _remember_image(kho_id: str, file_uid: str, phash_hex: str, sender: str):
+    data = _load_seen()
+    day = _today_key()
+    dday = data.setdefault(day, {})
+    bucket = dday.setdefault(kho_id, {"uids": [], "phash": []})
+    if file_uid and not any(rec.get("uid") == file_uid for rec in bucket["uids"]):
+        bucket["uids"].append({"uid": file_uid, "sender": sender})
+    if phash_hex and not any(rec.get("hex") == phash_hex for rec in bucket["phash"]):
+        bucket["phash"].append({"hex": phash_hex, "sender": sender})
+    _save_seen(data)
+
 
 # ===== STATE =====
 REQUIRED = set()      # set(id_kho)
@@ -95,6 +156,33 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text(f"❌ Không có ID kho '{id_kho}' trong danh sách theo dõi.")
         return
 
+    
+
+# === duplicate detection with metadata ===
+file_uid = None
+phash_hex = None
+if msg.photo:
+    try:
+        file = await msg.photo[-1].get_file()
+        file_uid = getattr(file, "file_unique_id", None) or getattr(msg.photo[-1], "file_unique_id", None)
+        buf = io.BytesIO()
+        await file.download(out=buf)
+        buf.seek(0)
+        img = Image.open(buf).convert("RGB")
+        phash_hex = str(imagehash.phash(img))
+    except Exception as e:
+        logger.warning("Download/Hash failed: %s", e)
+
+sender_name = (update.effective_user.full_name if update.effective_user else "") or ""
+
+if file_uid or phash_hex:
+    is_dup, day_prev, sender_prev = _find_duplicate_info(id_kho, file_uid, phash_hex)
+    if is_dup:
+        who = f" bởi {sender_prev}" if sender_prev else ""
+        when = f" ngày {day_prev}" if day_prev else ""
+        await msg.reply_text(f"⚠️ Ảnh này trùng/na ná ảnh đã gửi{who}{when}. Vui lòng chụp ảnh mới.")
+        return
+    _remember_image(id_kho, file_uid or "", phash_hex or "", sender_name)
     REPORTED_TODAY.add(id_kho)
     display_name = KHO_MAP.get(id_kho, ten_norm or "")
     try:
