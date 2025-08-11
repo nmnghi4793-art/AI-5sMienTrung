@@ -97,6 +97,14 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     id_kho, ten_norm = parse_id_from_text(text)
     if not id_kho:
+        await msg.reply_text("❌ Sai cú pháp.\nMẫu: <ID Kho> - <Tên Kho>\nVí dụ: DN01 - GXT Đà Nẵng")
+        return
+
+    if id_kho not in REQUIRED:
+        await msg.reply_text(f"❌ Không có ID kho '{id_kho}' trong danh sách theo dõi.")
+        return
+
+    if not id_kho:
         return
 
     # Accept if id_kho exists in REQUIRED (ignore name mismatch to be tolerant)
