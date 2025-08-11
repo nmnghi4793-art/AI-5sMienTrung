@@ -3,8 +3,6 @@ import os
 import re
 import json
 import hashlib
-import base64
-from io import BytesIO
 from datetime import datetime, date, time as dtime
 from zoneinfo import ZoneInfo
 
@@ -19,17 +17,11 @@ from telegram.ext import (
 # ========= CẤU HÌNH =========
 EXCEL_PATH = "danh_sach_nv_theo_id_kho.xlsx"  # Excel: cột id_kho, ten_kho
 HASH_DB_PATH = "hashes.json"                  # lưu hash ảnh (phát hiện trùng)
-SUBMIT_DB_PATH = "submissions.json"           # lưu tag đã nộp theo ngày
+SUBMIT_DB_PATH = "submissions.json"           # lưu ID đã nộp theo ngày
 TZ = ZoneInfo("Asia/Ho_Chi_Minh")             # múi giờ VN
 REPORT_HOUR = 21                              # 21:00 hằng ngày
 TEXT_PAIR_TIMEOUT = 120                       # giây giữ caption dùng chung
 REPORT_CHAT_IDS = [-1002688907477]            # ID group nhận báo cáo 21:00
-REQUIRED_TAGS = ["loi_di", "ke_hang", "khu_ve_sinh"]  # checklist 5S
-TAG_RX = re.compile(r"#([a-z0-9_]+)", re.IGNORECASE)
-
-# AI nhận diện ảnh (tùy chọn)
-VISION_PROVIDER = os.getenv("VISION_PROVIDER", "").lower().strip()  # "openai" hoặc ""
-OPENAI_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4o-mini")
 
 # ENV: BOT_TOKEN (bắt buộc). Có thể thêm REPORT_CHAT_IDS trong ENV để override, ví dụ "-1001,-1002"
 
@@ -54,7 +46,7 @@ def save_hash_db(db):
     _save_json(HASH_DB_PATH, db)
 
 def load_submit_db():
-    # dạng: { "YYYY-MM-DD": { "id_kho": ["loi_di","ke_hang"] } }
+    # dạng: { "YYYY-MM-DD": ["id1","id2",...] }
     return _load_json(SUBMIT_DB_PATH, {})
 
 def save_submit_db(db):
@@ -99,36 +91,6 @@ def parse_text_for_id_and_date(text: str):
 
     return _id, _date
 
-# ========= ẢNH & HASH =========
-async def get_file_bytes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bytes:
-    photo = update.message.photo[-1]  # ảnh lớn nhất
-    tg_file = await context.bot.get_file(photo.file_id)
-    b = await tg_file.download_as_bytearray()
-    return bytes(b)
-
-def hash_bytes(b: bytes) -> str:
-    return hashlib.md5(b).hexdigest()  # phát hiện trùng 100% file
-
-# ========= SUBMISSION (theo tag) =========
-def mark_tag(submit_db, id_kho: str, d: date, tag: str):
-    key = d.isoformat()
-    day = submit_db.get(key, {})
-    tags = set(day.get(id_kho, []))
-    tags.add(tag)
-    day[id_kho] = sorted(tags)
-    submit_db[key] = day
-
-def get_missing_by_warehouse(kho_map, submit_db, d: date):
-    key = d.isoformat()
-    day = submit_db.get(key, {})
-    result = {}
-    for kid in kho_map.keys():
-        have = set(day.get(kid, []))
-        miss = [t for t in REQUIRED_TAGS if t not in have]
-        if miss:
-            result[kid] = miss
-    return result
-
 # ========= GIỮ CAPTION DÙNG CHUNG =========
 _last_text = {}  # chat_id -> (text, ts)
 
@@ -144,56 +106,21 @@ def get_last_text(chat_id: int):
         return None
     return text
 
-# ========= AI PHÂN LOẠI ẢNH (tuỳ chọn) =========
-def classify_image_openai(image_bytes: bytes):
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        return None
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
-        b64 = base64.b64encode(image_bytes).decode("utf-8")
-        prompt = (
-            "Bạn là trợ lý phân loại ảnh 5S. "
-            "Hãy phân loại ảnh vào một trong các nhãn duy nhất sau: "
-            f"{', '.join(REQUIRED_TAGS)}. "
-            "Chỉ trả về đúng 1 nhãn (không giải thích). "
-            "Nếu không chắc, trả về 'unknown'."
-        )
-        resp = client.chat.completions.create(
-            model=os.getenv("OPENAI_VISION_MODEL", "gpt-4o-mini"),
-            messages=[
-                {"role": "system", "content": "You are a helpful vision classifier."},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                    ],
-                },
-            ],
-            temperature=0
-        )
-        label = resp.choices[0].message.content.strip().lower()
-        if label in REQUIRED_TAGS:
-            return label
-        return None
-    except Exception:
-        return None
-
-def auto_classify(image_bytes: bytes):
-    if VISION_PROVIDER == "openai":
-        return classify_image_openai(image_bytes)
-    return None  # chưa bật AI
+# ========= SUBMISSION =========
+def mark_submitted(submit_db, id_kho: str, d: date):
+    key = d.isoformat()
+    lst = submit_db.get(key, [])
+    if id_kho not in lst:
+        lst.append(id_kho)
+    submit_db[key] = lst
 
 # ========= HANDLERS =========
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         "✅ Bot sẵn sàng!\n\n"
-        "*Cú pháp linh hoạt* (ưu tiên có ID trong caption):\n"
+        "*Cú pháp đơn giản (không cần tag):*\n"
         "`<ID_KHO> - <Tên kho>`\n"
-        "`Ngày: dd/mm/yyyy` *(tuỳ chọn)*\n"
-        "Tag 5S (nếu có): `#loi_di`, `#ke_hang`, `#khu_ve_sinh`\n\n"
+        "`Ngày: dd/mm/yyyy` *(tuỳ chọn)*\n\n"
         "➡️ Mẹo: Gửi 1 tin nhắn text có ID/Ngày rồi gửi nhiều ảnh liên tiếp (không caption) — bot sẽ áp cùng caption 2 phút."
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
@@ -226,7 +153,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "✅ Đã nhận ID `{}` ({}). Gửi ảnh kèm tag 5S (#loi_di/#ke_hang/#khu_ve_sinh) hoặc để bot tự nhận diện nếu đã bật AI.".format(
+        "✅ Đã nhận ID `{}` ({}). Gửi ảnh ngay sau đó (không cần caption).".format(
             id_kho, kho_map[id_kho]
         ),
         parse_mode=ParseMode.MARKDOWN
@@ -270,7 +197,10 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # tải bytes ảnh & hash
-    b = await get_file_bytes(update, context)
+    photo = msg.photo[-1]
+    tg_file = await context.bot.get_file(photo.file_id)
+    b = await tg_file.download_as_bytearray()
+    b = bytes(b)
     h = hashlib.md5(b).hexdigest()
 
     # ===== CẢNH BÁO TRÙNG TRONG CÙNG LÔ/KHO/NGÀY =====
@@ -298,7 +228,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN
         )
         return
-    # ===== HẾT CẢNH BÁO TRÙNG LÔ =====
 
     # kiểm tra ảnh trùng toàn hệ thống (lịch sử)
     dups = [item for item in hash_db["items"] if item.get("hash") == h]
@@ -309,49 +238,35 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # nhận tag từ caption hoặc AI
-    tags = [t.lower() for t in TAG_RX.findall(caption_from_group)]
-    chosen = None
-    for t in tags:
-        if t in REQUIRED_TAGS:
-            chosen = t
-            break
-    if not chosen:
-        chosen = auto_classify(b)
-    if not chosen:
-        await msg.reply_text(
-            "⚠️ Chưa xác định hạng mục 5S. Thêm tag trong caption "
-            + ", ".join(f"#{t}" for t in REQUIRED_TAGS)
-            + " hoặc bật AI (VISION_PROVIDER=openai + OPENAI_API_KEY).",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
-
-    # ghi nhận nộp theo tag
+    # ghi nhận nộp (không cần tag)
     submit_db = load_submit_db()
-    mark_tag(submit_db, id_kho, d, chosen)
+    mark_submitted(submit_db, id_kho, d)
     save_submit_db(submit_db)
 
-    # lưu hash (sau cùng để không ghi nếu ảnh trùng)
+    # lưu hash
     info = {
         "ts": datetime.now(TZ).isoformat(timespec="seconds"),
         "chat_id": msg.chat_id,
         "user_id": msg.from_user.id,
         "id_kho": id_kho,
         "date": d.isoformat(),
-        "tag": chosen,
     }
     hash_db["items"].append({"hash": h, **info})
     save_hash_db(hash_db)
 
     await msg.reply_text(
-        "✅ Ghi nhận ảnh 5S cho *{}* (ID `{}`) - Ngày *{}* - Hạng mục: *#{}*.".format(
-            kho_map[id_kho], id_kho, d.strftime("%d/%m/%Y"), chosen
+        "✅ Đã ghi nhận ảnh 5S cho *{}* (ID `{}`) - Ngày *{}*.".format(
+            kho_map[id_kho], id_kho, d.strftime("%d/%m/%Y")
         ),
         parse_mode=ParseMode.MARKDOWN
     )
 
 # ========= BÁO CÁO 21:00 =========
+def get_missing_ids_for_day(kho_map, submit_db, d: date):
+    submitted = set(submit_db.get(d.isoformat(), []))
+    all_ids = set(kho_map.keys())
+    return sorted(all_ids - submitted)
+
 async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
     # ưu tiên dùng danh sách cài cứng; nếu rỗng thì lấy ENV
     chat_ids = REPORT_CHAT_IDS[:]
@@ -366,17 +281,13 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
     submit_db = load_submit_db()
     today = datetime.now(TZ).date()
 
-    missing_map = get_missing_by_warehouse(kho_map, submit_db, today)
-    if not missing_map:
+    missing = get_missing_ids_for_day(kho_map, submit_db, today)
+    if not missing:
         text = "📢 *BÁO CÁO 5S - {}*\nTất cả kho đã báo cáo 5S đủ ✅".format(today.strftime("%d/%m/%Y"))
     else:
-        lines = []
-        for kid, miss in sorted(missing_map.items(), key=lambda x: x[0]):
-            lines.append("- `{}`: {} → thiếu: {}".format(
-                kid, kho_map.get(kid, "(không rõ)"), ", ".join(f"#{m}" for m in miss)
-            ))
-        text = "📢 *BÁO CÁO 5S - {}*\nKho thiếu hạng mục:\n{}".format(
-            today.strftime("%d/%m/%Y"), "\n".join(lines)
+        lines = ["- `{}`: {}".format(mid, kho_map[mid]) for mid in missing]
+        text = "📢 *BÁO CÁO 5S - {}*\nChưa nhận ảnh 5S từ {} kho:\n{}".format(
+            today.strftime("%d/%m/%Y"), len(missing), "\n".join(lines)
         )
 
     for cid in chat_ids:
