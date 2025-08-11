@@ -21,7 +21,7 @@ SUBMIT_DB_PATH = "submissions.json"           # lưu ID đã nộp theo ngày
 TZ = ZoneInfo("Asia/Ho_Chi_Minh")             # múi giờ VN
 REPORT_HOUR = 21                              # 21:00 hằng ngày
 TEXT_PAIR_TIMEOUT = 120                       # giây giữ caption dùng chung
-REPORT_CHAT_IDS = [-1002688907477]            # <<< ID group nhận báo cáo 21:00 (có thể thêm nhiều id)
+REPORT_CHAT_IDS = [-1002688907477]            # ID group nhận báo cáo 21:00 (có thể thêm nhiều id)
 
 # ENV: BOT_TOKEN (bắt buộc). Có thể thêm REPORT_CHAT_IDS trong ENV để override, ví dụ: "-1001,-1002"
 
@@ -150,6 +150,10 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # NEW: /chatid để lấy chat id nhanh
 async def chatid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(str(update.effective_chat.id))
+
+# NEW: /report_now để gửi báo cáo ngay (không chờ 21:00)
+async def report_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_daily_report(context)
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
@@ -316,7 +320,8 @@ def build_app() -> Application:
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("chatid", chatid))  # NEW: lấy chat id
+    app.add_handler(CommandHandler("chatid", chatid))         # NEW
+    app.add_handler(CommandHandler("report_now", report_now))  # NEW
     app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, photo_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
