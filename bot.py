@@ -1,4 +1,6 @@
 # bot.py
+# Full bot: nhận ảnh 5S theo ID kho (không cần tag), gom thông báo 1 lần,
+# phát hiện ảnh trùng (trong lô/cùng ngày/lịch sử), báo cáo 21:00, /chatid, /report_now.
 import os
 import re
 import json
@@ -15,15 +17,13 @@ from telegram.ext import (
 )
 
 # ========= CẤU HÌNH =========
-EXCEL_PATH = "danh_sach_nv_theo_id_kho.xlsx"  # Excel: cột id_kho, ten_kho
+EXCEL_PATH = "danh_sach_nv_theo_id_kho.xlsx"  # Excel phải có cột: id_kho, ten_kho
 HASH_DB_PATH = "hashes.json"                  # lưu hash ảnh (phát hiện trùng)
 SUBMIT_DB_PATH = "submissions.json"           # lưu ID đã nộp theo ngày
 TZ = ZoneInfo("Asia/Ho_Chi_Minh")             # múi giờ VN
 REPORT_HOUR = 21                              # 21:00 hằng ngày
 TEXT_PAIR_TIMEOUT = 120                       # giây giữ caption dùng chung
-REPORT_CHAT_IDS = [-1002688907477]            # ID group nhận báo cáo 21:00
-
-# ENV: BOT_TOKEN (bắt buộc). Có thể thêm REPORT_CHAT_IDS trong ENV để override, ví dụ "-1001,-1002"
+REPORT_CHAT_IDS = [-1002688907477]            # ID group nhận báo cáo 21:00 (có thể thêm nhiều)
 
 # ========= JSON UTILS =========
 def _load_json(path: str, default):
@@ -69,7 +69,7 @@ ID_RX = re.compile(r"(\d{1,10})")
 DATE_RX = re.compile(r"(?:ngày|date|ngay)\s*[:\-]?\s*(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})", re.IGNORECASE)
 
 def parse_text_for_id_and_date(text: str):
-    """Có ID là được; ngày (tuỳ chọn) 'Ngày: dd/mm/yyyy'."""
+    """Chỉ cần có ID; ngày (tuỳ chọn) 'Ngày: dd/mm/yyyy'."""
     _id = None
     _date = date.today()
     if not text:
@@ -113,6 +113,26 @@ def mark_submitted(submit_db, id_kho: str, d: date):
     if id_kho not in lst:
         lst.append(id_kho)
     submit_db[key] = lst
+
+# ========= GOM ACK TRÁNH SPAM =========
+def enqueue_ack(context: ContextTypes.DEFAULT_TYPE, chat_id: int, key: str, base_text: str):
+    pending = context.chat_data.setdefault("pending_acks", {})
+    g = pending.setdefault(key, {"count": 0, "base": base_text})
+    g["count"] += 1
+    # debounce 2s, thay thế lần hẹn trước theo key
+    context.job_queue.run_once(send_ack, when=2, chat_id=chat_id, data={"key": key}, name=f"ack-{key}", replace=True)
+
+async def send_ack(context: ContextTypes.DEFAULT_TYPE):
+    chat_data = context.chat_data
+    key = context.job.data["key"]
+    pending = chat_data.get("pending_acks", {})
+    g = pending.pop(key, None)
+    if not g:
+        return
+    cnt = g["count"]
+    base = g["base"]
+    suffix = "\n(Đã nhận {} ảnh)".format(cnt) if cnt > 1 else ""
+    await context.bot.send_message(chat_id=context.job.chat_id, text=base + suffix, parse_mode="Markdown")
 
 # ========= HANDLERS =========
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -254,12 +274,12 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hash_db["items"].append({"hash": h, **info})
     save_hash_db(hash_db)
 
-    await msg.reply_text(
-        "✅ Đã ghi nhận ảnh 5S cho *{}* (ID `{}`) - Ngày *{}*.".format(
-            kho_map[id_kho], id_kho, d.strftime("%d/%m/%Y")
-        ),
-        parse_mode=ParseMode.MARKDOWN
+    # ===== GOM ACK 2s THAY VÌ TRẢ LỜI MỖI ẢNH =====
+    ack_key = "{}:{}:{}".format(msg.chat_id, id_kho, d.isoformat())
+    base = "✅ Đã ghi nhận ảnh 5S cho *{}* (ID `{}`) - Ngày *{}*.".format(
+        kho_map[id_kho], id_kho, d.strftime("%d/%m/%Y")
     )
+    enqueue_ack(context, msg.chat_id, ack_key, base)
 
 # ========= BÁO CÁO 21:00 =========
 def get_missing_ids_for_day(kho_map, submit_db, d: date):
