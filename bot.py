@@ -67,15 +67,9 @@ async def _warning_job(context):
         cur = 0
 
     if cur > REQUIRED_PHOTOS:
-        await context.bot.send_message(
-            chat_id,
-            f"⚠️ Bạn đã gửi quá số ảnh quy định: {cur}/{REQUIRED_PHOTOS}. Vui lòng chỉ gửi {REQUIRED_PHOTOS} ảnh."
-        )
+        await context.bot.send_message(chat_id, "Đã gửi quá số ảnh quy định")
     elif cur < REQUIRED_PHOTOS:
-        await context.bot.send_message(
-            chat_id,
-            f"⚠️ Hiện còn thiếu {REQUIRED_PHOTOS - cur} ảnh so với quy định {REQUIRED_PHOTOS}."
-        )
+        await context.bot.send_message(chat_id, f"Còn {REQUIRED_PHOTOS - cur} ảnh so với quy định")
     # Nếu đủ thì không gửi gì thêm
 
 def schedule_delayed_warning(context, chat_id, id_kho, d):
@@ -406,15 +400,8 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await ack_photo_progress(context, msg.chat_id, id_kho, kho_map[id_kho], d, cur)
     # Cảnh báo riêng: thừa/thiếu số ảnh so với quy định
-    if cur > REQUIRED_PHOTOS:
-        await msg.reply_text(
-            f"⚠️ Bạn đã gửi quá số ảnh quy định: {cur}/{REQUIRED_PHOTOS}. Vui lòng chỉ gửi {REQUIRED_PHOTOS} ảnh."
-        )
-    elif cur < REQUIRED_PHOTOS:
-        await msg.reply_text(
-            f"⚠️ Hiện còn thiếu {REQUIRED_PHOTOS - cur} ảnh so với quy định {REQUIRED_PHOTOS}."
-        )
-
+    # Cảnh báo gửi trễ 10s và gộp 1 dòng duy nhất
+    schedule_delayed_warning(context, msg.chat_id, id_kho, d)
 # ========= BÁO CÁO 21:00 =========
 def get_missing_ids_for_day(kho_map, submit_db, d: date):
     submitted = set(submit_db.get(d.isoformat(), []))
