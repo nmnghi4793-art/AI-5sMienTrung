@@ -44,52 +44,6 @@ REQUIRED_PHOTOS = int(os.getenv("REQUIRED_PHOTOS", "4"))
 # Cố định group nhận báo cáo (có thể override bằng ENV REPORT_CHAT_IDS)
 DEFAULT_REPORT_CHAT_IDS = [-1002688907477]
 
-
-# ========= CẢNH BÁO TRỄ (10s) =========
-# Lưu job cảnh báo theo (chat_id, id_kho, day_key) để tránh spam nhiều tin khi gửi liên tiếp
-WARN_JOBS = {}  # {(chat_id, id_kho, day_key): Job}
-
-def _day_key(d):
-    return d.isoformat()
-
-async def _warning_job(context):
-    """Job chạy sau 10s kể từ lần ghi nhận gần nhất."""
-    data = context.job.data or {}
-    chat_id = data.get("chat_id")
-    id_kho = data.get("id_kho")
-    day = data.get("day")
-    # Đọc lại count mới nhất để cảnh báo chính xác
-    from datetime import date as _date
-    try:
-        count_db = load_count_db()
-        cur = count_db.get(day, {}).get(str(id_kho), 0)
-    except Exception:
-        cur = 0
-
-    if cur > REQUIRED_PHOTOS:
-        await context.bot.send_message(chat_id, "Đã gửi quá số ảnh quy định")
-    elif cur < REQUIRED_PHOTOS:
-        await context.bot.send_message(chat_id, f"Còn {REQUIRED_PHOTOS - cur} ảnh so với quy định")
-    # Nếu đủ thì không gửi gì thêm
-
-def schedule_delayed_warning(context, chat_id, id_kho, d):
-    """Đặt/cập nhật 1 job cảnh báo chạy sau 10s."""
-    key = (chat_id, str(id_kho), _day_key(d))
-    # Huỷ job cũ nếu đang tồn tại để chỉ gửi 1 cảnh báo sau 10s kể từ lần gửi cuối
-    old = WARN_JOBS.pop(key, None)
-    if old:
-        try:
-            old.schedule_removal()
-        except Exception:
-            pass
-    # Tạo job mới
-    job = context.job_queue.run_once(
-        _warning_job, when=10, data={"chat_id": chat_id, "id_kho": str(id_kho), "day": _day_key(d)},
-        name=f"warn_{chat_id}_{id_kho}_{_day_key(d)}"
-    )
-    WARN_JOBS[key] = job
-
-
 # ========= JSON UTILS =========
 def _load_json(path: str, default):
     try:
@@ -400,8 +354,15 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await ack_photo_progress(context, msg.chat_id, id_kho, kho_map[id_kho], d, cur)
     # Cảnh báo riêng: thừa/thiếu số ảnh so với quy định
-    # Cảnh báo gửi trễ 10s và gộp 1 dòng duy nhất
-    schedule_delayed_warning(context, msg.chat_id, id_kho, d)
+    if cur > REQUIRED_PHOTOS:
+        await msg.reply_text(
+            f"⚠️ Bạn đã gửi quá số ảnh quy định: {cur}/{REQUIRED_PHOTOS}. Vui lòng chỉ gửi {REQUIRED_PHOTOS} ảnh."
+        )
+    elif cur < REQUIRED_PHOTOS:
+        await msg.reply_text(
+            f"⚠️ Hiện còn thiếu {REQUIRED_PHOTOS - cur} ảnh so với quy định {REQUIRED_PHOTOS}."
+        )
+
 # ========= BÁO CÁO 21:00 =========
 def get_missing_ids_for_day(kho_map, submit_db, d: date):
     submitted = set(submit_db.get(d.isoformat(), []))
