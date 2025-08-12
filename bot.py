@@ -320,7 +320,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if cur < REQUIRED_PHOTOS:
         await msg.reply_text(
             f"✅ Đã ghi nhận ảnh {cur}/{REQUIRED_PHOTOS} cho *{kho_map[id_kho]}* (ID `{id_kho}`) - Ngày *{d.strftime('%d/%m/%Y')}*. "
-
+            f"Còn thiếu *{REQUIRED_PHOTOS - cur}* ảnh.",
             parse_mode=ParseMode.MARKDOWN
         )
     elif cur == REQUIRED_PHOTOS:
