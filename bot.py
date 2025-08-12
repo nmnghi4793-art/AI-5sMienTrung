@@ -44,6 +44,53 @@ REQUIRED_PHOTOS = int(os.getenv("REQUIRED_PHOTOS", "4"))
 # Cố định group nhận báo cáo (có thể override bằng ENV REPORT_CHAT_IDS)
 DEFAULT_REPORT_CHAT_IDS = [-1002688907477]
 
+
+# ========= CẢNH BÁO TRỄ (6s) =========
+# Lưu job cảnh báo theo (chat_id, id_kho, day_key) để tránh spam khi gửi liên tiếp
+WARN_JOBS = {}  # {(chat_id, id_kho, day_key): Job}
+
+def _day_key(d):
+    return d.isoformat()
+
+async def _warning_job(context):
+    """Job chạy sau 6s kể từ lần ghi nhận gần nhất."""
+    data = context.job.data or {}
+    chat_id = data.get("chat_id")
+    id_kho = data.get("id_kho")
+    day = data.get("day")
+
+    # Đọc lại count mới nhất để cảnh báo chính xác
+    try:
+        count_db = load_count_db()
+        cur = int(count_db.get(day, {}).get(str(id_kho), 0))
+    except Exception:
+        cur = 0
+
+    if cur > REQUIRED_PHOTOS:
+        await context.bot.send_message(chat_id, f"⚠️ Đã gởi quá số ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
+    elif cur < REQUIRED_PHOTOS:
+        await context.bot.send_message(chat_id, f"⚠️ Còn {REQUIRED_PHOTOS - cur} thiếu 1 ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
+    # = 4 thì không gửi gì
+
+def schedule_delayed_warning(context, chat_id, id_kho, d):
+    """Đặt/cập nhật 1 job cảnh báo chạy sau 6 giây."""
+    key = (chat_id, str(id_kho), _day_key(d))
+    # Huỷ job cũ nếu có để chỉ gửi 1 cảnh báo sau lần gửi cuối
+    old = WARN_JOBS.pop(key, None)
+    if old:
+        try:
+            old.schedule_removal()
+        except Exception:
+            pass
+    # Tạo job mới (6s)
+    job = context.job_queue.run_once(
+        _warning_job, when=6,
+        data={"chat_id": chat_id, "id_kho": str(id_kho), "day": _day_key(d)},
+        name=f"warn_{chat_id}_{id_kho}_{_day_key(d)}"
+    )
+    WARN_JOBS[key] = job
+
+
 # ========= JSON UTILS =========
 def _load_json(path: str, default):
     try:
