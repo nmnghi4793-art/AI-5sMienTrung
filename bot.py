@@ -1,13 +1,13 @@
 # bot.py
-# Bot 5S hoàn chỉnh (GIỮ NGUYÊN CÁC CHỨC NĂNG CŨ) + chỉnh Mục (1) hiển thị "ID - Tên kho"
-# --------------------------------------------------
+# Bot 5S hoàn chỉnh + GỘP TIN NHẮN XÁC NHẬN (không còn câu "Còn thiếu X ảnh")
+# ---------------------------------------------------------------------------------
 # Tính năng:
 # - Nhận ảnh theo ID kho (không cần tag). Có thể gửi 1 text chứa ID/Ngày trước rồi gửi nhiều ảnh liền sau (không caption).
 # - Ghép caption trong 2 phút (text trước áp cho ảnh sau).
 # - Kiểm tra trùng ảnh: trong cùng lô gửi (album), trùng trong ngày theo kho, và trùng với lịch sử (log là "ảnh quá khứ").
-# - Đếm số ảnh mỗi kho/ngày; cảnh báo tức thời khi CHƯA ĐỦ/ĐÃ ĐỦ/VƯỢT số lượng yêu cầu.
+# - Đếm số ảnh mỗi kho/ngày; phản hồi **gộp** vào 1 tin duy nhất cho mỗi (kho, ngày) và update tiến độ 1/4 → 2/4 → 3/4 → 4/4.
 # - Báo cáo 21:00 theo format bạn yêu cầu:
-#   (1) Các kho chưa báo cáo 5S → *hiển thị*: "- `ID` - Tên kho"
+#   (1) Các kho chưa báo cáo 5S → "- `ID` - Tên kho"
 #   (2) Kho sử dụng ảnh cũ/quá khứ → "- `ID`: trùng ảnh ngày dd/mm/yyyy" hoặc "Không có"
 #   (3) Chỉ liệt kê kho CHƯA ĐỦ; nếu không có thì "Tất cả kho đã gửi đủ số lượng ảnh theo quy định"
 # - Lệnh: /chatid (xem chat id), /report_now (gửi báo cáo ngay).
@@ -164,6 +164,41 @@ def log_past_use(id_kho: str, prev_date: str, h: str, today: date):
     db[key] = arr
     save_past_db(db)
 
+# ========= GỘP TIN NHẮN TIẾN ĐỘ (mỗi kho/mỗi ngày 1 tin) =========
+PROGRESS_MSG = {}  # {(chat_id, id_kho, yyyy-mm-dd): {'msg_id': int|None, 'lines': list[str]}}
+
+def day_key(d: date) -> str:
+    return d.isoformat()  # YYYY-MM-DD
+
+async def ack_photo_progress(context: ContextTypes.DEFAULT_TYPE, chat_id: int, id_kho: str, ten_kho: str, d: date, cur_count: int):
+    """
+    Gom toàn bộ tiến độ gửi ảnh của 1 kho trong 1 ngày vào 1 tin nhắn.
+    Không còn câu 'Còn thiếu X ảnh'.
+    Khi đủ REQUIRED_PHOTOS ảnh thì thêm dòng 'ĐÃ ĐỦ ... Cảm ơn bạn!'.
+    """
+    key = (chat_id, str(id_kho), day_key(d))
+    state = PROGRESS_MSG.setdefault(key, {'msg_id': None, 'lines': []})
+    date_text = d.strftime("%d/%m/%Y")
+
+    if cur_count < REQUIRED_PHOTOS:
+        line = f"✅ Đã ghi nhận ảnh {cur_count}/{REQUIRED_PHOTOS} cho {ten_kho} (ID `{id_kho}`) - Ngày {date_text}."
+    else:
+        line = f"✅ ĐÃ ĐỦ {REQUIRED_PHOTOS}/{REQUIRED_PHOTOS} ảnh cho {ten_kho} (ID `{id_kho}`) - Ngày {date_text}. Cảm ơn bạn!"
+
+    state['lines'].append(line)
+    text = "\n".join(state['lines'])
+
+    if state['msg_id'] is None:
+        m = await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+        state['msg_id'] = m.message_id
+    else:
+        try:
+            await context.bot.edit_message_text(chat_id=chat_id, message_id=state['msg_id'],
+                                                text=text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+        except Exception:
+            m = await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+            state['msg_id'] = m.message_id
+
 # ========= HANDLERS =========
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
@@ -312,27 +347,12 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hash_db["items"].append({"hash": h, **info})
     save_hash_db(hash_db)
 
-    # đếm số ảnh và phản hồi tức thời
+    # đếm số ảnh và **GỘP** phản hồi theo kho/ngày
     count_db = load_count_db()
     cur = inc_count(count_db, id_kho, d, step=1)
     save_count_db(count_db)
 
-    if cur < REQUIRED_PHOTOS:
-        await msg.reply_text(
-            f"✅ Đã ghi nhận ảnh {cur}/{REQUIRED_PHOTOS} cho *{kho_map[id_kho]}* (ID `{id_kho}`) - Ngày *{d.strftime('%d/%m/%Y')}*. "
-            f"Còn thiếu *{REQUIRED_PHOTOS - cur}* ảnh.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-    elif cur == REQUIRED_PHOTOS:
-        await msg.reply_text(
-            f"✅ ĐÃ ĐỦ *{cur}/{REQUIRED_PHOTOS}* ảnh cho *{kho_map[id_kho]}* (ID `{id_kho}`) - Ngày *{d.strftime('%d/%m/%Y')}*. Cảm ơn bạn!",
-            parse_mode=ParseMode.MARKDOWN
-        )
-    else:
-        await msg.reply_text(
-            f"ℹ️ Đã nhận *{cur}* ảnh (vượt yêu cầu {REQUIRED_PHOTOS}) cho *{kho_map[id_kho]}* (ID `{id_kho}`) - Ngày *{d.strftime('%d/%m/%Y')}*.",
-            parse_mode=ParseMode.MARKDOWN
-        )
+    await ack_photo_progress(context, msg.chat_id, id_kho, kho_map[id_kho], d, cur)
 
 # ========= BÁO CÁO 21:00 =========
 def get_missing_ids_for_day(kho_map, submit_db, d: date):
