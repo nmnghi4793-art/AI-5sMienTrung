@@ -1,26 +1,26 @@
 # bot.py
-# Bot 5S hoàn chỉnh + CHÍNH SÁCH 2 PHÚT:
-# - Trong vòng 2 phút kể từ lần báo gần nhất của cùng (kho, ngày) => EDIT tin nhắn cũ
-# - Quá 2 phút => GỬI TIN NHẮN MỚI (mở một "đợt" xác nhận mới)
-#
-# Các chức năng giữ nguyên:
+# Bot 5S hoàn chỉnh + GỘP TIN NHẮN XÁC NHẬN (không còn câu "Còn thiếu X ảnh")
+# ---------------------------------------------------------------------------------
+# Tính năng:
 # - Nhận ảnh theo ID kho (không cần tag). Có thể gửi 1 text chứa ID/Ngày trước rồi gửi nhiều ảnh liền sau (không caption).
 # - Ghép caption trong 2 phút (text trước áp cho ảnh sau).
-# - Kiểm tra trùng ảnh: trong cùng lô (album), trùng trong ngày theo kho, trùng lịch sử (log ảnh quá khứ).
-# - Đếm số ảnh/kho/ngày; phản hồi không còn câu “Còn thiếu X ảnh”.
-# - Gộp tiến độ theo phiên 2 phút (1 tin/phiên) và cập nhật 1/4 → 2/4 → 3/4 → 4/4; đủ thì thêm câu cảm ơn.
-# - Báo cáo 21:00: (1) Kho chưa báo cáo (ID - Tên), (2) Ảnh cũ/quá khứ, (3) Kho chưa đủ ảnh.
-# - Lệnh: /chatid, /report_now
+# - Kiểm tra trùng ảnh: trong cùng lô gửi (album), trùng trong ngày theo kho, và trùng với lịch sử (log là "ảnh quá khứ").
+# - Đếm số ảnh mỗi kho/ngày; phản hồi **gộp** vào 1 tin duy nhất cho mỗi (kho, ngày) và update tiến độ 1/4 → 2/4 → 3/4 → 4/4.
+# - Báo cáo 21:00 theo format bạn yêu cầu:
+#   (1) Các kho chưa báo cáo 5S → "- `ID` - Tên kho"
+#   (2) Kho sử dụng ảnh cũ/quá khứ → "- `ID`: trùng ảnh ngày dd/mm/yyyy" hoặc "Không có"
+#   (3) Chỉ liệt kê kho CHƯA ĐỦ; nếu không có thì "Tất cả kho đã gửi đủ số lượng ảnh theo quy định"
+# - Lệnh: /chatid (xem chat id), /report_now (gửi báo cáo ngay).
 #
-# ENV cần: BOT_TOKEN
-# Tuỳ chọn ENV: REPORT_CHAT_IDS, REQUIRED_PHOTOS (mặc định 4)
-# Yêu cầu file Excel: danh_sach_nv_theo_id_kho.xlsx cột: id_kho, ten_kho
+# Cấu hình ENV bắt buộc: BOT_TOKEN
+# Tuỳ chọn ENV: REPORT_CHAT_IDS="-100111,-100222", REQUIRED_PHOTOS="4"
+# Excel bắt buộc: danh_sach_nv_theo_id_kho.xlsx có cột: id_kho, ten_kho
 
 import os
 import re
 import json
 import hashlib
-from datetime import datetime, date, time as dtime, timezone, timedelta
+from datetime import datetime, date, time as dtime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -32,20 +32,17 @@ from telegram.ext import (
 )
 
 # ========= CẤU HÌNH =========
-EXCEL_PATH = "danh_sach_nv_theo_id_kho.xlsx"
-HASH_DB_PATH = "hashes.json"
-SUBMIT_DB_PATH = "submissions.json"
-COUNT_DB_PATH = "counts.json"
-PAST_DB_PATH  = "past_uses.json"
-TZ = ZoneInfo("Asia/Ho_Chi_Minh")
-REPORT_HOUR = 21
-TEXT_PAIR_TIMEOUT = 120
+EXCEL_PATH = "danh_sach_nv_theo_id_kho.xlsx"  # Excel: cột id_kho, ten_kho
+HASH_DB_PATH = "hashes.json"                  # lưu hash ảnh (phát hiện trùng)
+SUBMIT_DB_PATH = "submissions.json"           # { "YYYY-MM-DD": ["id1","id2",...] }
+COUNT_DB_PATH = "counts.json"                 # { "YYYY-MM-DD": { "id_kho": count } }
+PAST_DB_PATH  = "past_uses.json"              # { "YYYY-MM-DD": [ {id_kho, prev_date, hash} ] }
+TZ = ZoneInfo("Asia/Ho_Chi_Minh")             # múi giờ VN
+REPORT_HOUR = 21                              # 21:00 hằng ngày
+TEXT_PAIR_TIMEOUT = 120                       # giây: giữ caption/text dùng chung
 REQUIRED_PHOTOS = int(os.getenv("REQUIRED_PHOTOS", "4"))
-DEFAULT_REPORT_CHAT_IDS = [-1002688907477]  # có thể override bằng ENV REPORT_CHAT_IDS
-
-# Chính sách EDIT trong vòng X phút, mặc định 2 phút
-EDIT_WINDOW_MINUTES = int(os.getenv("EDIT_WINDOW_MINUTES", "2"))
-EDIT_WINDOW_SECONDS = EDIT_WINDOW_MINUTES * 60
+# Cố định group nhận báo cáo (có thể override bằng ENV REPORT_CHAT_IDS)
+DEFAULT_REPORT_CHAT_IDS = [-1002688907477]
 
 # ========= JSON UTILS =========
 def _load_json(path: str, default):
@@ -61,14 +58,29 @@ def _save_json(path: str, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
 
-def load_hash_db():   return _load_json(HASH_DB_PATH, {"items": []})
-def save_hash_db(db): _save_json(HASH_DB_PATH, db)
-def load_submit_db(): return _load_json(SUBMIT_DB_PATH, {})
-def save_submit_db(db): _save_json(SUBMIT_DB_PATH, db)
-def load_count_db():  return _load_json(COUNT_DB_PATH, {})
-def save_count_db(db): _save_json(COUNT_DB_PATH, db)
-def load_past_db():   return _load_json(PAST_DB_PATH, {})
-def save_past_db(db): _save_json(PAST_DB_PATH, db)
+def load_hash_db():
+    return _load_json(HASH_DB_PATH, {"items": []})
+
+def save_hash_db(db):
+    _save_json(HASH_DB_PATH, db)
+
+def load_submit_db():
+    return _load_json(SUBMIT_DB_PATH, {})
+
+def save_submit_db(db):
+    _save_json(SUBMIT_DB_PATH, db)
+
+def load_count_db():
+    return _load_json(COUNT_DB_PATH, {})
+
+def save_count_db(db):
+    _save_json(COUNT_DB_PATH, db)
+
+def load_past_db():
+    return _load_json(PAST_DB_PATH, {})
+
+def save_past_db(db):
+    _save_json(PAST_DB_PATH, db)
 
 # ========= KHO MAP =========
 def load_kho_map():
@@ -87,43 +99,58 @@ ID_RX = re.compile(r"(\d{1,10})")
 DATE_RX = re.compile(r"(?:ngày|date|ngay)\s*[:\-]?\s*(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})", re.IGNORECASE)
 
 def parse_text_for_id_and_date(text: str):
+    """Trích ID kho & ngày (tuỳ chọn 'Ngày: dd/mm/yyyy'). Nếu không có ngày -> hôm nay."""
     _id = None
     _date = date.today()
     if not text:
         return None, _date
+
     m_id = ID_RX.search(text)
-    if m_id: _id = m_id.group(1)
+    if m_id:
+        _id = m_id.group(1)
+
     m_d = DATE_RX.search(text)
     if m_d:
-        d, m, y = (int(x) for x in m_d.groups())
+        d, m, y = m_d.groups()
+        d, m, y = int(d), int(m), int(y)
         if y < 100: y += 2000
-        try: _date = date(y, m, d)
-        except Exception: _date = date.today()
+        try:
+            _date = date(y, m, d)
+        except Exception:
+            _date = date.today()
+
     return _id, _date
 
 # ========= GIỮ TEXT DÙNG CHUNG =========
 _last_text = {}  # chat_id -> (text, ts)
+
 def upsert_last_text(chat_id: int, text: str):
     _last_text[chat_id] = (text, datetime.now(TZ).timestamp())
+
 def get_last_text(chat_id: int):
     data = _last_text.get(chat_id)
-    if not data: return None
+    if not data:
+        return None
     text, ts = data
-    if datetime.now(TZ).timestamp() - ts > TEXT_PAIR_TIMEOUT: return None
+    if datetime.now(TZ).timestamp() - ts > TEXT_PAIR_TIMEOUT:
+        return None
     return text
 
 # ========= SUBMISSION/COUNTS =========
 def mark_submitted(submit_db, id_kho: str, d: date):
     key = d.isoformat()
     lst = submit_db.get(key, [])
-    if id_kho not in lst: lst.append(id_kho)
+    if id_kho not in lst:
+        lst.append(id_kho)
     submit_db[key] = lst
 
 def inc_count(count_db, id_kho: str, d: date, step: int = 1) -> int:
     key = d.isoformat()
     day = count_db.get(key, {})
     cur = int(day.get(id_kho, 0)) + step
-    day[id_kho] = cur; count_db[key] = day; return cur
+    day[id_kho] = cur
+    count_db[key] = day
+    return cur
 
 def get_count(count_db, id_kho: str, d: date) -> int:
     return int(count_db.get(d.isoformat(), {}).get(id_kho, 0))
@@ -137,60 +164,50 @@ def log_past_use(id_kho: str, prev_date: str, h: str, today: date):
     db[key] = arr
     save_past_db(db)
 
-# ========= GỘP THEO PHIÊN 2 PHÚT =========
-# Lưu trạng thái mỗi (chat_id, id_kho, yyyy-mm-dd) cho "phiên" 2 phút
-PROGRESS_SESS = {}  # key -> {'msg_id': int|None, 'last_ts': float, 'lines': list[str]}
-def _sess_key(chat_id: int, id_kho: str, d: date) -> str:
-    return f"{chat_id}|{id_kho}|{d.isoformat()}"
+# ========= GỘP TIN NHẮN TIẾN ĐỘ (mỗi kho/mỗi ngày 1 tin) =========
+PROGRESS_MSG = {}  # {(chat_id, id_kho, yyyy-mm-dd): {'msg_id': int|None, 'lines': list[str]}}
+
+def day_key(d: date) -> str:
+    return d.isoformat()  # YYYY-MM-DD
 
 async def ack_photo_progress(context: ContextTypes.DEFAULT_TYPE, chat_id: int, id_kho: str, ten_kho: str, d: date, cur_count: int):
     """
-    Trong vòng EDIT_WINDOW_MINUTES kể từ lần cập nhật gần nhất của kho/ngày -> EDIT tin cũ.
-    Nếu quá cửa sổ -> tạo tin mới (reset lines).
-    Không dùng câu 'Còn thiếu X ảnh' theo yêu cầu.
+    Gom toàn bộ tiến độ gửi ảnh của 1 kho trong 1 ngày vào 1 tin nhắn.
+    Không còn câu 'Còn thiếu X ảnh'.
+    Khi đủ REQUIRED_PHOTOS ảnh thì thêm dòng 'ĐÃ ĐỦ ... Cảm ơn bạn!'.
     """
-    now_ts = datetime.now(timezone.utc).timestamp()
-    key = _sess_key(chat_id, id_kho, d)
-    sess = PROGRESS_SESS.get(key)
-
-    # tạo dòng hiện tại
+    key = (chat_id, str(id_kho), day_key(d))
+    state = PROGRESS_MSG.setdefault(key, {'msg_id': None, 'lines': []})
     date_text = d.strftime("%d/%m/%Y")
+
     if cur_count < REQUIRED_PHOTOS:
         line = f"✅ Đã ghi nhận ảnh {cur_count}/{REQUIRED_PHOTOS} cho {ten_kho} (ID `{id_kho}`) - Ngày {date_text}."
     else:
         line = f"✅ ĐÃ ĐỦ {REQUIRED_PHOTOS}/{REQUIRED_PHOTOS} ảnh cho {ten_kho} (ID `{id_kho}`) - Ngày {date_text}. Cảm ơn bạn!"
 
-    # nếu chưa có phiên hoặc đã quá thời gian -> mở phiên mới
-    if not sess or (now_ts - sess.get('last_ts', 0) > EDIT_WINDOW_SECONDS):
-        sess = {'msg_id': None, 'last_ts': now_ts, 'lines': [line]}
-        PROGRESS_SESS[key] = sess
-        text = "\n".join(sess['lines'])
-        m = await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
-        sess['msg_id'] = m.message_id
-        sess['last_ts'] = now_ts
-        return
+    state['lines'].append(line)
+    text = "\n".join(state['lines'])
 
-    # còn trong cửa sổ -> append dòng và EDIT tin cũ
-    sess['lines'].append(line)
-    text = "\n".join(sess['lines'])
-    try:
-        await context.bot.edit_message_text(chat_id=chat_id, message_id=sess['msg_id'],
-                                            text=text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
-    except Exception:
+    if state['msg_id'] is None:
         m = await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
-        sess['msg_id'] = m.message_id
-    finally:
-        sess['last_ts'] = now_ts
+        state['msg_id'] = m.message_id
+    else:
+        try:
+            await context.bot.edit_message_text(chat_id=chat_id, message_id=state['msg_id'],
+                                                text=text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+        except Exception:
+            m = await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+            state['msg_id'] = m.message_id
 
 # ========= HANDLERS =========
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         "✅ Bot sẵn sàng!\n\n"
-        "*Cú pháp (không cần tag):*\n"
+        "*Cú pháp đơn giản (không cần tag):*\n"
         "`<ID_KHO> - <Tên kho>`\n"
         "`Ngày: dd/mm/yyyy` *(tuỳ chọn)*\n\n"
         f"Số ảnh yêu cầu mỗi kho/ngày: *{REQUIRED_PHOTOS}*.\n"
-        "➡️ Gửi 1 text có ID/Ngày rồi gửi nhiều ảnh (không caption) — bot dùng lại caption trong 2 phút.\n\n"
+        "➡️ Mẹo: Gửi 1 tin nhắn text có ID/Ngày rồi gửi nhiều ảnh liên tiếp (không caption) — bot sẽ áp cùng caption 2 phút.\n\n"
         "Lệnh: `/chatid` lấy chat id, `/report_now` gửi báo cáo ngay."
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
@@ -207,17 +224,33 @@ async def report_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
-    if text: upsert_last_text(update.effective_chat.id, text)
+    if text:
+        upsert_last_text(update.effective_chat.id, text)
+
     id_kho, d = parse_text_for_id_and_date(text)
     kho_map = context.bot_data["kho_map"]
-    if not id_kho: return
+
+    if not id_kho:
+        return  # không làm phiền
+
     if id_kho not in kho_map:
-        await update.message.reply_text(f"❌ ID `{id_kho}` *không có* trong danh sách. Kiểm tra lại!", parse_mode=ParseMode.MARKDOWN); return
+        await update.message.reply_text(
+            f"❌ ID `{id_kho}` *không có* trong danh sách. Kiểm tra lại!",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
     cur = get_count(load_count_db(), id_kho, d)
-    await update.message.reply_text(f"✅ Đã nhận ID `{id_kho}` ({kho_map[id_kho]}). Hôm nay hiện có *{cur} / {REQUIRED_PHOTOS}* ảnh. Gửi ảnh ngay sau đó (không cần caption).", parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(
+        f"✅ Đã nhận ID `{id_kho}` ({kho_map[id_kho]}). Hôm nay hiện có *{cur} / {REQUIRED_PHOTOS}* ảnh. "
+        "Gửi ảnh ngay sau đó (không cần caption).",
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
+
+    # ---- ALBUM / MEDIA GROUP ----
     caption = (msg.caption or "").strip()
     caption_from_group = caption
     mgid = msg.media_group_id
@@ -228,51 +261,107 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             rec["caption"] = caption
         if not caption and rec["caption"]:
             caption_from_group = rec["caption"]
+
+    # ---- FALLBACK: dùng text đã lưu trong 2 phút ----
     if not caption_from_group:
         caption_from_group = get_last_text(msg.chat_id) or ""
+
+    # parse
     id_kho, d = parse_text_for_id_and_date(caption_from_group)
     kho_map = context.bot_data["kho_map"]
+
     if not id_kho:
-        await msg.reply_text("⚠️ *Thiếu ID kho.* Thêm ID vào caption hoặc gửi 1 text có ID trước rồi gửi ảnh (trong 2 phút).", parse_mode=ParseMode.MARKDOWN); return
+        await msg.reply_text(
+            "⚠️ *Thiếu ID kho.* Thêm ID vào caption hoặc gửi 1 text có ID trước rồi gửi ảnh (trong 2 phút).",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
     if id_kho not in kho_map:
-        await msg.reply_text(f"❌ ID `{id_kho}` *không có* trong danh sách Excel. Kiểm tra lại!", parse_mode=ParseMode.MARKDOWN); return
+        await msg.reply_text(
+            f"❌ ID `{id_kho}` *không có* trong danh sách Excel. Kiểm tra lại!",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
 
     # tải bytes ảnh & hash
     photo = msg.photo[-1]
     tg_file = await context.bot.get_file(photo.file_id)
-    b = await tg_file.download_as_bytearray(); b = bytes(b)
+    b = await tg_file.download_as_bytearray()
+    b = bytes(b)
     h = hashlib.md5(b).hexdigest()
 
-    # trùng trong cùng lô
+    # ===== CẢNH BÁO TRÙNG TRONG CÙNG LÔ (album) =====
     mg_hashes = context.chat_data.setdefault("mg_hashes", {})
     if mgid:
         seen = mg_hashes.setdefault(mgid, set())
         if h in seen:
-            await msg.reply_text("⚠️ Có ít nhất 2 ảnh *giống nhau* trong cùng lô gửi. Vui lòng chọn ảnh khác.", parse_mode=ParseMode.MARKDOWN); return
+            await msg.reply_text(
+                "⚠️ Có ít nhất 2 ảnh *giống nhau* trong cùng lô gửi. Vui lòng chọn ảnh khác.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
         seen.add(h)
 
     hash_db = load_hash_db()
-    # trùng trong ngày/kho
-    same_day_dups = [it for it in hash_db["items"] if it.get("hash")==h and it.get("id_kho")==id_kho and it.get("date")==d.isoformat()]
-    if same_day_dups:
-        await msg.reply_text(f"⚠️ Kho *{kho_map[id_kho]}* hôm nay đã có 1 ảnh *giống hệt* ảnh này. Vui lòng thay ảnh khác.", parse_mode=ParseMode.MARKDOWN); return
 
-    # trùng lịch sử -> log quá khứ
-    dups = [it for it in hash_db["items"] if it.get("hash")==h]
+    # ===== TRÙNG TRONG NGÀY / LỊCH SỬ =====
+    # Trùng cùng ngày/kho
+    same_day_dups = [
+        item for item in hash_db["items"]
+        if item.get("hash") == h and item.get("id_kho") == id_kho and item.get("date") == d.isoformat()
+    ]
+    if same_day_dups:
+        await msg.reply_text(
+            f"⚠️ Kho *{kho_map[id_kho]}* hôm nay đã có 1 ảnh *giống hệt* ảnh này. Vui lòng thay ảnh khác.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    # Trùng lịch sử -> log quá khứ (lấy ngày sớm nhất)
+    dups = [item for item in hash_db["items"] if item.get("hash") == h]
     if dups:
         prev_dates = sorted(set([it.get("date") for it in dups if it.get("date") != d.isoformat()]))
         if prev_dates:
             log_past_use(id_kho=id_kho, prev_date=prev_dates[0], h=h, today=d)
-        await msg.reply_text("⚠️ Ảnh *trùng* với ảnh đã gửi trước đây. Vui lòng chụp ảnh mới khác để tránh trùng lặp.", parse_mode=ParseMode.MARKDOWN); return
+        await msg.reply_text(
+            "⚠️ Ảnh *trùng* với ảnh đã gửi trước đây. Vui lòng chụp ảnh mới khác để tránh trùng lặp.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
 
-    # ghi nhận
-    submit_db = load_submit_db(); mark_submitted(submit_db, id_kho, d); save_submit_db(submit_db)
-    info = {"ts": datetime.now(TZ).isoformat(timespec="seconds"), "chat_id": msg.chat_id, "user_id": msg.from_user.id, "id_kho": id_kho, "date": d.isoformat()}
-    hash_db["items"].append({"hash": h, **info}); save_hash_db(hash_db)
+    # ===== GHI NHẬN ẢNH HỢP LỆ =====
+    # ghi nhận nộp
+    submit_db = load_submit_db()
+    mark_submitted(submit_db, id_kho, d)
+    save_submit_db(submit_db)
 
-    # đếm & phản hồi (2 phút/phiên)
-    count_db = load_count_db(); cur = inc_count(count_db, id_kho, d, 1); save_count_db(count_db)
+    # lưu hash
+    info = {
+        "ts": datetime.now(TZ).isoformat(timespec="seconds"),
+        "chat_id": msg.chat_id,
+        "user_id": msg.from_user.id,
+        "id_kho": id_kho,
+        "date": d.isoformat(),
+    }
+    hash_db["items"].append({"hash": h, **info})
+    save_hash_db(hash_db)
+
+    # đếm số ảnh và **GỘP** phản hồi theo kho/ngày
+    count_db = load_count_db()
+    cur = inc_count(count_db, id_kho, d, step=1)
+    save_count_db(count_db)
+
     await ack_photo_progress(context, msg.chat_id, id_kho, kho_map[id_kho], d, cur)
+    # Cảnh báo riêng: thừa/thiếu số ảnh so với quy định
+    if cur > REQUIRED_PHOTOS:
+        await msg.reply_text(
+            f"⚠️ Bạn đã gửi quá số ảnh quy định: {cur}/{REQUIRED_PHOTOS}. Vui lòng chỉ gửi {REQUIRED_PHOTOS} ảnh."
+        )
+    elif cur < REQUIRED_PHOTOS:
+        await msg.reply_text(
+            f"⚠️ Hiện còn thiếu {REQUIRED_PHOTOS - cur} ảnh so với quy định {REQUIRED_PHOTOS}."
+        )
 
 # ========= BÁO CÁO 21:00 =========
 def get_missing_ids_for_day(kho_map, submit_db, d: date):
@@ -281,26 +370,32 @@ def get_missing_ids_for_day(kho_map, submit_db, d: date):
     return sorted(all_ids - submitted)
 
 async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
+    # danh sách chat nhận báo cáo
     chat_ids = DEFAULT_REPORT_CHAT_IDS[:]
     env = os.getenv("REPORT_CHAT_IDS", "").strip()
     if env:
         chat_ids = [int(x.strip()) for x in env.split(",") if x.strip()]
-    if not chat_ids: return
+    if not chat_ids:
+        return
 
     kho_map = context.bot_data["kho_map"]
-    submit_db = load_submit_db(); count_db = load_count_db(); past_db = load_past_db()
+    submit_db = load_submit_db()
+    count_db = load_count_db()
+    past_db = load_past_db()
     today = datetime.now(TZ).date()
 
     # 1) Chưa báo cáo
     missing_ids = get_missing_ids_for_day(kho_map, submit_db, today)
 
-    # 2) Ảnh cũ/quá khứ
+    # 2) Ảnh cũ/quá khứ: gom theo kho, lấy 1 ngày đại diện (sớm nhất) để báo gọn
     past_uses = past_db.get(today.isoformat(), [])
     past_by_kho = {}
     for it in past_uses:
         kid = it.get("id_kho"); prev = it.get("prev_date")
-        if not kid or not prev: continue
-        s = past_by_kho.setdefault(kid, set()); s.add(prev)
+        if not kid or not prev:
+            continue
+        s = past_by_kho.setdefault(kid, set())
+        s.add(prev)
     past_lines = []
     for kid, dates in sorted(past_by_kho.items()):
         rep = min(dates)
@@ -316,7 +411,7 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
             not_enough_list.append((kid, c))
 
     parts = []
-    # 1) Chưa báo cáo 5S — ID - Tên
+    # 1) Chưa báo cáo 5S — HIỂN THỊ ID - TÊN KHO
     if missing_ids:
         lines = ["*1) Các kho chưa báo cáo 5S:*"]
         for mid in missing_ids:
@@ -334,7 +429,9 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
 
     # 3) Chưa đủ
     if not_enough_list:
-        sec3 = ["*3) Các kho chưa gửi đủ số lượng ảnh:*"] + [f"- `{kid}`: {c}/{REQUIRED_PHOTOS}" for kid, c in sorted(not_enough_list)]
+        sec3 = ["*3) Các kho chưa gửi đủ số lượng ảnh:*"]
+        for kid, c in sorted(not_enough_list):
+            sec3.append(f"- `{kid}`: {c}/{REQUIRED_PHOTOS}")
         parts.append("\n".join(sec3))
     else:
         parts.append("*3) Tất cả kho đã gửi đủ số lượng ảnh theo quy định*")
@@ -352,15 +449,22 @@ def build_app() -> Application:
     token = os.getenv("BOT_TOKEN", "").strip()
     if not token:
         raise RuntimeError("Thiếu biến môi trường BOT_TOKEN")
+
     app = ApplicationBuilder().token(token).build()
     app.bot_data["kho_map"] = load_kho_map()
+
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("chatid", chatid))
     app.add_handler(CommandHandler("report_now", report_now))
     app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, photo_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-    app.job_queue.run_daily(send_daily_report, time=dtime(hour=REPORT_HOUR, minute=0, tzinfo=TZ), name="daily_report_21h")
+
+    app.job_queue.run_daily(
+        send_daily_report,
+        time=dtime(hour=REPORT_HOUR, minute=0, tzinfo=TZ),
+        name="daily_report_21h"
+    )
     return app
 
 def main():
