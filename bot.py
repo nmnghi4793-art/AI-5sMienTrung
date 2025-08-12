@@ -353,11 +353,8 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_count_db(count_db)
 
     await ack_photo_progress(context, msg.chat_id, id_kho, kho_map[id_kho], d, cur)
-    # Cảnh báo riêng: thừa/thiếu số ảnh so với quy định
-    if cur > REQUIRED_PHOTOS:
-        schedule_delayed_warning(context, msg.chat_id, id_kho, d)
-    elif cur < REQUIRED_PHOTOS:
-        schedule_delayed_warning(context, msg.chat_id, id_kho, d)
+    # Đặt cảnh báo trễ 6s sau mỗi lần ghi nhận (job sẽ tự kiểm tra và chỉ gửi nếu <4 hoặc >4)
+    schedule_delayed_warning(context, msg.chat_id, id_kho, d)
 # ========= BÁO CÁO 21:00 =========
 def get_missing_ids_for_day(kho_map, submit_db, d: date):
     submitted = set(submit_db.get(d.isoformat(), []))
