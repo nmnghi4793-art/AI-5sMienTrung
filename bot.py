@@ -23,29 +23,6 @@ import hashlib
 from datetime import datetime, date, time as dtime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
-# ==== Timezone & cut-off helpers ====
-from zoneinfo import ZoneInfo
-TZ = ZoneInfo("Asia/Ho_Chi_Minh")
-CUTOFF_HOUR = 20
-CUTOFF_MINUTE = 30
-
-def _cutoff_time():
-    return time(CUTOFF_HOUR, CUTOFF_MINUTE, tzinfo=TZ)
-
-def effective_today(now: datetime | None = None):
-    """Business day used for counting submissions.
-    If time >= 20:30, roll to next calendar day; else use today's date (VN)."""
-    now = now.astimezone(TZ) if now else datetime.now(TZ)
-    return (now + timedelta(days=1)).date() if now.timetz() >= _cutoff_time() else now.date()
-
-def report_business_date(now: datetime | None = None):
-    """Which date to report at 'now'.
-    If time >= 20:30, report today's effective date; otherwise report yesterday."""
-    now = now.astimezone(TZ) if now else datetime.now(TZ)
-    return now.date() if now.timetz() >= _cutoff_time() else (now - timedelta(days=1)).date()
-# ====================================
-
-
 import pandas as pd
 from telegram import Update
 from telegram.constants import ParseMode
@@ -65,27 +42,6 @@ REPORT_HOUR = 21
 TEXT_PAIR_TIMEOUT = 120
 REQUIRED_PHOTOS = int(os.getenv("REQUIRED_PHOTOS", "4"))
 DEFAULT_REPORT_CHAT_IDS = [-1002688907477]  # có thể override bằng ENV REPORT_CHAT_IDS
-
-# --- Cut-off giờ chốt ngày VN ---
-from datetime import time as _time, timedelta as _timedelta, timezone as _timezone
-CUTOFF_TIME = _time(20, 30)  # 20:30 theo yêu cầu
-
-def effective_report_date_from_dt_utc(msg_dt_utc):
-    """
-    Quy đổi message.date (UTC) sang ngày báo cáo theo VN + cut-off 20:30.
-    - Nếu local_time <= 20:30: tính cho NGÀY HIỆN TẠI (VN)
-    - Nếu local_time >  20:30: chuyển sang NGÀY HÔM SAU (VN)
-    """
-    if msg_dt_utc is None:
-        # fallback: dùng ngày VN hiện tại
-        return datetime.now(TZ).date()
-    if msg_dt_utc.tzinfo is None:
-        msg_dt_utc = msg_dt_utc.replace(tzinfo=_timezone.utc)
-    local_dt = msg_dt_utc.astimezone(TZ)
-    if (local_dt.hour, local_dt.minute, local_dt.second) <= (CUTOFF_TIME.hour, CUTOFF_TIME.minute, CUTOFF_TIME.second):
-        return local_dt.date()
-    else:
-        return (local_dt + _timedelta(days=1)).date()
 
 # Chính sách EDIT trong vòng X phút, mặc định 2 phút
 EDIT_WINDOW_MINUTES = int(os.getenv("EDIT_WINDOW_MINUTES", "2"))
@@ -253,10 +209,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     if text: upsert_last_text(update.effective_chat.id, text)
     id_kho, d = parse_text_for_id_and_date(text)
-    _provided_date = bool(DATE_RX.search(text))
-    if not _provided_date:
-        d = effective_report_date_from_dt_utc(update.message.date)
-
     kho_map = context.bot_data["kho_map"]
     if not id_kho: return
     if id_kho not in kho_map:
@@ -279,10 +231,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not caption_from_group:
         caption_from_group = get_last_text(msg.chat_id) or ""
     id_kho, d = parse_text_for_id_and_date(caption_from_group)
-    _provided_date = bool(DATE_RX.search(caption_from_group))
-    if not _provided_date:
-        d = effective_report_date_from_dt_utc(update.message.date)
-
     kho_map = context.bot_data["kho_map"]
     if not id_kho:
         await msg.reply_text("⚠️ *Thiếu ID kho.* Thêm ID vào caption hoặc gửi 1 text có ID trước rồi gửi ảnh (trong 2 phút).", parse_mode=ParseMode.MARKDOWN); return
@@ -341,7 +289,7 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
 
     kho_map = context.bot_data["kho_map"]
     submit_db = load_submit_db(); count_db = load_count_db(); past_db = load_past_db()
-    today = effective_today()
+    today = datetime.now(TZ).date()
 
     # 1) Chưa báo cáo
     missing_ids = get_missing_ids_for_day(kho_map, submit_db, today)
