@@ -31,6 +31,35 @@ from telegram.ext import (
     ContextTypes, filters
 )
 
+# ===== Scoring imports & ENV =====
+import cv2
+import numpy as np
+
+SCORING_ENABLED = os.getenv("SCORING_ENABLED","0") == "1"
+SCORING_MODE = os.getenv("SCORING_MODE","rule").strip().lower() or "rule"
+# Default weights per area
+_DEFAULT_WEIGHTS = {
+    "HangHoa": {"align": 40, "tidy": 40, "aisle": 20},
+    "WC":      {"stain": 60, "trash": 25, "dry": 15},
+    "KhoBai":  {"clean": 50, "obstacle": 30, "line": 20},
+    "VanPhong":{"desk_tidy": 45, "surface_clean": 35, "cable": 20}
+}
+try:
+    AREA_RULE_WEIGHTS = json.loads(os.getenv("AREA_RULE_WEIGHTS","") or "{}")
+    if not AREA_RULE_WEIGHTS:
+        AREA_RULE_WEIGHTS = _DEFAULT_WEIGHTS
+except Exception:
+    AREA_RULE_WEIGHTS = _DEFAULT_WEIGHTS
+
+# Parameters for quality scoring
+BRIGHT_MIN, BRIGHT_MAX = 70, 200
+MIN_SHORT_EDGE = 600
+LAPLACIAN_GOOD = 250.0
+
+# Regex to detect KV in caption/text, e.g., "KV: HangHoa" or "Khu_vuc=WC"
+AREA_RX = re.compile(r'(?:\bkv\b|\bkhu[_\s]*vuc)\s*[:=]\s*([a-zA-Z0-9_-]{2,})', re.I)
+
+
 # ========= CẤU HÌNH =========
 EXCEL_PATH = "danh_sach_nv_theo_id_kho.xlsx"  # Excel: cột id_kho, ten_kho
 HASH_DB_PATH = "hashes.json"                  # lưu hash ảnh (phát hiện trùng)
@@ -69,7 +98,7 @@ async def _warning_job(context):
     if cur > REQUIRED_PHOTOS:
         await context.bot.send_message(chat_id, f"⚠️ Đã gởi quá số ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
     elif cur < REQUIRED_PHOTOS:
-        await context.bot.send_message(chat_id, f"⚠️ Còn thiếu {REQUIRED_PHOTOS - cur} ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
+        await context.bot.send_message(chat_id, f"⚠️ Còn {REQUIRED_PHOTOS - cur} thiếu 1 ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
     # = 4 thì không gửi gì
 
 def schedule_delayed_warning(context, chat_id, id_kho, d):
@@ -183,6 +212,153 @@ def get_last_text(chat_id: int):
         return None
     return text
 
+
+# ========= 5S SCORING HELPERS (rule-based) =========
+def _score_quality_components(img_bgr):
+    if img_bgr is None or img_bgr.size == 0:
+        return 0.0, 0.0, 0.0, (0,0)
+    h, w = img_bgr.shape[:2]
+    img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    sharp_val = float(cv2.Laplacian(img_gray, cv2.CV_64F).var())
+    sharp_score = 1.0 if sharp_val >= LAPLACIAN_GOOD else max(0.0, sharp_val / LAPLACIAN_GOOD)
+    mean_bright = float(img_gray.mean())
+    if mean_bright < BRIGHT_MIN:
+        bright_score = max(0.0, mean_bright/BRIGHT_MIN)
+    elif mean_bright > BRIGHT_MAX:
+        bright_score = max(0.0, (255.0-mean_bright)/(255.0-BRIGHT_MAX+1e-6))
+    else:
+        bright_score = 1.0
+    short_edge = min(h, w)
+    size_score = 1.0 if short_edge >= MIN_SHORT_EDGE else max(0.0, short_edge/MIN_SHORT_EDGE)
+    return sharp_score, bright_score, size_score, (w,h)
+
+def _edge_density(img_gray, t1=80, t2=200):
+    edges = cv2.Canny(img_gray, t1, t2)
+    return float((edges>0).mean())
+
+def _score_hanghoa(img_bgr):
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 80, 200)
+    lines = cv2.HoughLines(edges, 1, np.pi/180, 120)
+    angles = []
+    if lines is not None:
+        for l in lines[:100]:
+            rho, theta = l[0]
+            angles.append(theta)
+    def angle_dev(theta):
+        return min(abs(theta-0), abs(theta-np.pi/2))
+    if angles:
+        devs = np.array([angle_dev(t) for t in angles], dtype=np.float32)
+        align_score = float(max(0.0, 1.0 - (devs.mean()/(np.pi/8))))
+    else:
+        align_score = 0.6
+    clutter = _edge_density(gray)  # 0..1
+    tidy_score = float(max(0.0, 1.0 - min(clutter/0.25, 1.0)))
+    h, w = gray.shape
+    lower = gray[int(h*0.55):, :]
+    lower_edges = cv2.Canny(lower, 80, 200)
+    empty_ratio = 1.0 - float((lower_edges>0).mean())
+    aisle_score = float(max(0.0, min(empty_ratio, 1.0)))
+    return {"align": align_score, "tidy": tidy_score, "aisle": aisle_score}
+
+def _score_wc(img_bgr):
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7,7))
+    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, k)
+    _, th = cv2.threshold(blackhat, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    stain_ratio = float((th>0).mean())
+    stain_score = float(max(0.0, 1.0 - min(stain_ratio/0.10, 1.0)))
+    h, w = gray.shape
+    lower = gray[int(h*0.55):, :]
+    lower_blur = cv2.GaussianBlur(lower, (5,5), 0)
+    _, lower_th = cv2.threshold(lower_blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    cnts, _ = cv2.findContours(lower_th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    small_blobs = [c for c in cnts if 10 <= cv2.contourArea(c) <= 500]
+    trash_density = float(len(small_blobs)) / max(1.0, (w*h/10000.0))
+    trash_score = float(max(0.0, 1.0 - min(trash_density/1.5, 1.0)))
+    lap = cv2.Laplacian(gray, cv2.CV_64F)
+    local_var = float(np.var(lap))
+    dry_score = float(max(0.0, 1.0 - min(local_var/500.0, 1.0)))
+    return {"stain": stain_score, "trash": trash_score, "dry": dry_score}
+
+def _score_khobai(img_bgr):
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5,5), 0)
+    _, th = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    dirt_ratio = float((th == 0).mean())
+    clean_score = float(max(0.0, 1.0 - min(dirt_ratio/0.20, 1.0)))
+    h, w = gray.shape
+    band = gray[int(h*0.45):int(h*0.75), :]
+    obs_density = _edge_density(band)
+    obstacle_score = float(max(0.0, 1.0 - min(obs_density/0.30, 1.0)))
+    edges = cv2.Canny(gray, 80, 200)
+    lines = cv2.HoughLines(edges, 1, np.pi/180, 150)
+    line_score = 0.6 if lines is None else 1.0
+    return {"clean": clean_score, "obstacle": obstacle_score, "line": float(line_score)}
+
+def _score_vanphong(img_bgr):
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
+    band = gray[int(h*0.25):int(h*0.75), int(w*0.10):int(w*0.90)]
+    band_blur = cv2.GaussianBlur(band, (5,5), 0)
+    _, band_th = cv2.threshold(band_blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    cnts, _ = cv2.findContours(band_th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    small_items = [c for c in cnts if 20 <= cv2.contourArea(c) <= 1500]
+    item_density = float(len(small_items)) / max(1.0, (w*h/10000.0))
+    desk_tidy = float(max(0.0, 1.0 - min(item_density/1.5, 1.0)))
+    k = cv2.getStructuringElement(cv2.MORPH_RECT, (7,7))
+    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, k)
+    _, th = cv2.threshold(blackhat, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    dirty_ratio = float((th>0).mean())
+    surface_clean = float(max(0.0, 1.0 - min(dirty_ratio/0.15, 1.0)))
+    margin = gray[:, :int(w*0.20)]
+    edges = cv2.Canny(margin, 60, 160)
+    cable_density = float((edges>0).mean())
+    cable = float(max(0.0, 1.0 - min(cable_density/0.35, 1.0)))
+    return {"desk_tidy": desk_tidy, "surface_clean": surface_clean, "cable": cable}
+
+def _kv_key_from_text(kv_text):
+    kv = (kv_text or "").strip().lower()
+    if "hanghoa" in kv or "hàng" in kv or "hang" in kv:
+        return "HangHoa"
+    if "wc" in kv or "toilet" in kv or "vesinh" in kv or "vệ" in kv or "tolet" in kv:
+        return "WC"
+    if "kho" in kv or "kho bãi" in kv:
+        return "KhoBai"
+    if "văn" in kv or "vanphong" in kv or "ban lam viec" in kv or "ban" in kv:
+        return "VanPhong"
+    return "HangHoa"  # default
+
+def apply_scoring_rule(photo_bytes: bytes, kv_text: str, is_duplicate: bool=False):
+    img = cv2.imdecode(np.frombuffer(photo_bytes, np.uint8), cv2.IMREAD_COLOR)
+    sharp_s, bright_s, size_s, (w,h) = _score_quality_components(img)
+    q_score = 0.2 * (0.6*sharp_s + 0.4*bright_s)
+    kv_key = _kv_key_from_text(kv_text)
+    if kv_key == "HangHoa":
+        parts = _score_hanghoa(img)
+    elif kv_key == "WC":
+        parts = _score_wc(img)
+    elif kv_key == "KhoBai":
+        parts = _score_khobai(img)
+    else:
+        parts = _score_vanphong(img)
+    weights = AREA_RULE_WEIGHTS.get(kv_key, _DEFAULT_WEIGHTS[kv_key])
+    total_w = float(sum(weights.values())) or 100.0
+    content_s = 0.0
+    for name, val in parts.items():
+        content_s += (float(val) * (float(weights.get(name,0))/total_w) * 0.8)
+    dup_penalty = 0.10 if is_duplicate else 0.0
+    total_norm = max(0.0, q_score + content_s - dup_penalty)
+    total = int(round(total_norm*100))
+    grade = "A" if total >= 80 else ("B" if total >= 65 else "C")
+    details = " · ".join([f"{k}:{v:.2f}" for k,v in parts.items()])
+    text = (
+        "🧮 *Điểm 5S cho ảnh này*\n"
+        f"- Tổng: *{total}/100* → Loại *{grade}*\n"
+        f"- KV: `{kv_key}` · Hạng mục: {details}\n"
+        f"- Chất lượng: nét {sharp_s:.2f} · sáng {bright_s:.2f} · kích thước {w}×{h}"
+    )
+    return text
 # ========= SUBMISSION/COUNTS =========
 def mark_submitted(submit_db, id_kho: str, d: date):
     key = d.isoformat()
@@ -398,6 +574,20 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     count_db = load_count_db()
     cur = inc_count(count_db, id_kho, d, step=1)
     save_count_db(count_db)
+
+    
+    # ===== CHẤM ĐIỂM 5S (rule-based, không ML) =====
+    if SCORING_ENABLED and SCORING_MODE == "rule":
+        # Lấy KV từ caption/text nếu có
+        kv_text = None
+        m_kv = AREA_RX.search(caption_from_group or "")
+        if m_kv:
+            kv_text = m_kv.group(1)
+        reply_text = apply_scoring_rule(b, kv_text or "", is_duplicate=False)
+        try:
+            await msg.reply_text(reply_text, parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            pass
 
     await ack_photo_progress(context, msg.chat_id, id_kho, kho_map[id_kho], d, cur)
     # Đặt cảnh báo trễ 6s sau mỗi lần ghi nhận (job sẽ tự kiểm tra và chỉ gửi nếu <4 hoặc >4)
