@@ -78,6 +78,30 @@ DEFAULT_REPORT_CHAT_IDS = [-1002688907477]
 # Lưu job cảnh báo theo (chat_id, id_kho, day_key) để tránh spam khi gửi liên tiếp
 WARN_JOBS = {}  # {(chat_id, id_kho, day_key): Job}
 
+# ========= SCORING: helper to compact message & delayed send (5s) =========
+def compact_scoring_text(full_md: str) -> str:
+    lines = [ln for ln in (full_md or '').splitlines() if ln.strip()]
+    kept = []
+    for ln in lines:
+        st = ln.strip()
+        if st.startswith("- KV:"):
+            continue
+        if st.startswith("- Chất lượng:"):
+            continue
+        kept.append(ln)
+    return "\n".join(kept)
+
+async def _send_scoring_job(context: ContextTypes.DEFAULT_TYPE):
+    data = context.job.data or {}
+    chat_id = data.get("chat_id")
+    text = data.get("text")
+    if chat_id and text:
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            pass
+
+
 def _day_key(d):
     return d.isoformat()
 
@@ -584,14 +608,23 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if m_kv:
             kv_text = m_kv.group(1)
         reply_text = apply_scoring_rule(b, kv_text or "", is_duplicate=False)
-        try:
-            await msg.reply_text(reply_text, parse_mode=ParseMode.MARKDOWN)
-        except Exception:
-            pass
+        compact_md = compact_scoring_text(reply_text)
 
     await ack_photo_progress(context, msg.chat_id, id_kho, kho_map[id_kho], d, cur)
     # Đặt cảnh báo trễ 6s sau mỗi lần ghi nhận (job sẽ tự kiểm tra và chỉ gửi nếu <4 hoặc >4)
     schedule_delayed_warning(context, msg.chat_id, id_kho, d)
+
+    # Gửi đánh giá 5S thành 1 tin nhắn, trễ 5 giây sau khi báo ghi nhận
+    if SCORING_ENABLED and SCORING_MODE == "rule":
+        try:
+            context.job_queue.run_once(
+                _send_scoring_job,
+                when=5,
+                data={"chat_id": msg.chat_id, "text": compact_md},
+                name=f"score_{msg.chat_id}_{msg.message_id}"
+            )
+        except Exception:
+            pass
 # ========= BÁO CÁO 21:00 =========
 def get_missing_ids_for_day(kho_map, submit_db, d: date):
     submitted = set(submit_db.get(d.isoformat(), []))
