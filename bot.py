@@ -44,6 +44,7 @@ _DEFAULT_WEIGHTS = {
     "KhoBai":  {"clean": 50, "obstacle": 30, "line": 20},
     "VanPhong":{"desk_tidy": 45, "surface_clean": 35, "cable": 20}
 
+}
 # Ngưỡng để nêu vấn đề/khuyến nghị (0..1)
 _AREA_RULE_THRESHOLDS = {
     "HangHoa": {"align": 0.70, "tidy": 0.60, "aisle": 0.70},
@@ -57,7 +58,6 @@ try:
         AREA_RULE_THRESHOLDS.setdefault(k, v)
 except Exception:
     AREA_RULE_THRESHOLDS = _AREA_RULE_THRESHOLDS
-}
 try:
     AREA_RULE_WEIGHTS = json.loads(os.getenv("AREA_RULE_WEIGHTS","") or "{}")
     if not AREA_RULE_WEIGHTS:
@@ -502,7 +502,7 @@ def _diagnose(kv_key: str, parts: dict):
         if parts.get("cable",1) < th["cable"]:
             issues.append("Dây điện/cáp lộn xộn"); recs.append("Dùng kẹp/ống bọc dây; gom dây về một mép bàn/đế cố định")
     return issues, recs
-ef apply_scoring_rule(photo_bytes: bytes, kv_text: str, is_duplicate: bool=False):
+def apply_scoring_rule(photo_bytes: bytes, kv_text: str, is_duplicate: bool=False):
     img = cv2.imdecode(np.frombuffer(photo_bytes, np.uint8), cv2.IMREAD_COLOR)
     sharp_s, bright_s, size_s, (w,h) = _score_quality_components(img)
     q_score = 0.2 * (0.6*sharp_s + 0.4*bright_s)
@@ -757,7 +757,9 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if m_kv:
             kv_text = m_kv.group(1)
         reply_text = apply_scoring_rule(b, kv_text or "", is_duplicate=False)
-        compact_md = compact_scoring_text(reply_text)
+        item = apply_scoring_struct(b, kv_text or "", False)
+        key = _scoring_key(msg.chat_id, str(id_kho), d.strftime('%d/%m/%Y'))
+        SCORING_BUFFER[key].append(item)
 
     await ack_photo_progress(context, msg.chat_id, id_kho, kho_map[id_kho], d, cur)
     # Đặt cảnh báo trễ 6s sau mỗi lần ghi nhận (job sẽ tự kiểm tra và chỉ gửi nếu <4 hoặc >4)
