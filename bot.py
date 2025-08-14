@@ -17,15 +17,9 @@
 # Excel bắt buộc: danh_sach_nv_theo_id_kho.xlsx có cột: id_kho, ten_kho
 
 import os
-import io
 import re
 import json
 import hashlib
-import numpy as np
-try:
-    from PIL import Image
-except ModuleNotFoundError:
-    Image = None
 from datetime import datetime, date, time as dtime
 from zoneinfo import ZoneInfo
 
@@ -75,7 +69,7 @@ async def _warning_job(context):
     if cur > REQUIRED_PHOTOS:
         await context.bot.send_message(chat_id, f"⚠️ Đã gởi quá số ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
     elif cur < REQUIRED_PHOTOS:
-        await context.bot.send_message(chat_id, f"⚠️ Còn thiếu {REQUIRED_PHOTOS - cur} ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
+        await context.bot.send_message(chat_id, f"⚠️ Còn {REQUIRED_PHOTOS - cur} thiếu 1 ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
     # = 4 thì không gửi gì
 
 def schedule_delayed_warning(context, chat_id, id_kho, d):
@@ -302,22 +296,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
-    # --- caption-first parsing ---
-    incoming_caption = (msg.caption or '').strip() if hasattr(msg, 'caption') else ''
-    if incoming_caption:
-        try:
-            upsert_last_text(context, msg.chat_id, msg.from_user.id, incoming_caption)
-        except Exception:
-            pass
-    source_text = incoming_caption or (get_last_text(context, msg.chat_id, msg.from_user.id) or '')
-    # --- caption-first parsing (handle photo + caption in same message) ---
-    incoming_caption = (msg.caption or '').strip() if hasattr(msg, 'caption') else ''
-    if incoming_caption:
-        try:
-            upsert_last_text(context, msg.chat_id, msg.from_user.id, incoming_caption)
-        except Exception:
-            pass
-    source_text = incoming_caption or (get_last_text(context, msg.chat_id, msg.from_user.id) or '')
 
     # ---- ALBUM / MEDIA GROUP ----
     caption = (msg.caption or "").strip()
@@ -336,7 +314,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption_from_group = get_last_text(msg.chat_id) or ""
 
     # parse
-    id_kho, d = parse_text_for_id_and_date(source_text)
+    id_kho, d = parse_text_for_id_and_date(caption_from_group)
     kho_map = context.bot_data["kho_map"]
 
     if not id_kho:
@@ -360,31 +338,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     b = bytes(b)
     h = hashlib.md5(b).hexdigest()
 
-    # ---- pHash & Past-duplicate check (added) ----
-    phash_db = load_phash_db()
-    phash_hex = _phash_compute(b)
-    today_key = d.isoformat()
-    prev = is_past_duplicate(str(id_kho), today_key, phash_hex, phash_db, max_days=90, thresh=6) if phash_hex is not None else None
-    if prev:
-        prev_day, dist = prev
-        try:
-            await msg.reply_text(f"⚠️ Ảnh này trùng/giống với ảnh đã gửi ngày {prev_day} (kho {id_kho}).")
-        except Exception:
-            pass
-    # Append today's phash
-    by_kho = phash_db.get(today_key, {})
-    cur_list = set(by_kho.get(str(id_kho), []))
-    if phash_hex is not None:
-        cur_list.add(phash_hex)
-    by_kho[str(id_kho)] = sorted(cur_list)
-    phash_db[today_key] = by_kho
-    save_phash_db(phash_db)
-
-
-    
-
-
-# ===== CẢNH BÁO TRÙNG TRONG CÙNG LÔ (album) =====
+    # ===== CẢNH BÁO TRÙNG TRONG CÙNG LÔ (album) =====
     mg_hashes = context.chat_data.setdefault("mg_hashes", {})
     if mgid:
         seen = mg_hashes.setdefault(mgid, set())
@@ -446,9 +400,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_count_db(count_db)
 
     await ack_photo_progress(context, msg.chat_id, id_kho, kho_map[id_kho], d, cur)
-    await schedule_delayed_warning(context, msg.chat_id, id_kho, d)
-    # Ensure delayed warning always scheduled (6s after ack)
-    await schedule_delayed_warning(context, msg.chat_id, id_kho, d)
     # Đặt cảnh báo trễ 6s sau mỗi lần ghi nhận (job sẽ tự kiểm tra và chỉ gửi nếu <4 hoặc >4)
     schedule_delayed_warning(context, msg.chat_id, id_kho, d)
 # ========= BÁO CÁO 21:00 =========
@@ -546,7 +497,6 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("chatid", chatid))
     app.add_handler(CommandHandler("report_now", report_now))
     app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, photo_handler))
-    app.add_handler(MessageHandler(filters.Document.IMAGE & ~filters.COMMAND, photo_handler))  # also accept images sent as files
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     app.job_queue.run_daily(
@@ -561,10 +511,5 @@ def main():
     print("Bot is running...")
     app.run_polling(close_loop=False)
 
-
-
 if __name__ == "__main__":
-    app = build_app()
-    # PTB 20.x: run_polling sẽ tự chuẩn bị event loop.
-    # Nếu trước đó bạn từng dùng webhook, PTB sẽ xoá webhook khi start polling.
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
+    main()
