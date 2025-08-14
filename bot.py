@@ -452,7 +452,6 @@ def _kv_key_from_text(kv_text):
         return "VanPhong"
     return "HangHoa"  # default
 
-d
 def _score_by_kv(photo_bytes: bytes, kv_text: str):
     img = cv2.imdecode(np.frombuffer(photo_bytes, np.uint8), cv2.IMREAD_COLOR)
     kv_key = _kv_key_from_text(kv_text)
