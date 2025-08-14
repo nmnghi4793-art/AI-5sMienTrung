@@ -298,6 +298,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
+    # --- caption-first parsing (handle photo + caption in same message) ---
+    incoming_caption = (msg.caption or '').strip() if hasattr(msg, 'caption') else ''
+    if incoming_caption:
+        try:
+            upsert_last_text(context, msg.chat_id, msg.from_user.id, incoming_caption)
+        except Exception:
+            pass
+    source_text = incoming_caption or (get_last_text(context, msg.chat_id, msg.from_user.id) or '')
 
     # ---- ALBUM / MEDIA GROUP ----
     caption = (msg.caption or "").strip()
@@ -316,7 +324,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption_from_group = get_last_text(msg.chat_id) or ""
 
     # parse
-    id_kho, d = parse_text_for_id_and_date(caption_from_group)
+    id_kho, d = parse_text_for_id_and_date(source_text)
     kho_map = context.bot_data["kho_map"]
 
     if not id_kho:
@@ -425,6 +433,8 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_count_db(count_db)
 
     await ack_photo_progress(context, msg.chat_id, id_kho, kho_map[id_kho], d, cur)
+    # Ensure delayed warning always scheduled (6s after ack)
+    await schedule_delayed_warning(context, msg.chat_id, id_kho, d)
     # Đặt cảnh báo trễ 6s sau mỗi lần ghi nhận (job sẽ tự kiểm tra và chỉ gửi nếu <4 hoặc >4)
     schedule_delayed_warning(context, msg.chat_id, id_kho, d)
 # ========= BÁO CÁO 21:00 =========
@@ -522,6 +532,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("chatid", chatid))
     app.add_handler(CommandHandler("report_now", report_now))
     app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, photo_handler))
+    app.add_handler(MessageHandler(filters.Document.IMAGE & ~filters.COMMAND, photo_handler))  # also accept images sent as files
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     app.job_queue.run_daily(
