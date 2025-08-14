@@ -17,11 +17,15 @@
 # Excel bắt buộc: danh_sach_nv_theo_id_kho.xlsx có cột: id_kho, ten_kho
 
 import os
+import io
 import re
 import json
 import hashlib
 import numpy as np
-from PIL import Image
+try:
+    from PIL import Image
+except ModuleNotFoundError:
+    Image = None
 from datetime import datetime, date, time as dtime
 from zoneinfo import ZoneInfo
 
@@ -352,7 +356,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phash_db = load_phash_db()
     phash_hex = _phash_compute(b)
     today_key = d.isoformat()
-    prev = is_past_duplicate(str(id_kho), today_key, phash_hex, phash_db, max_days=90, thresh=6)
+    prev = is_past_duplicate(str(id_kho), today_key, phash_hex, phash_db, max_days=90, thresh=6) if phash_hex is not None else None
     if prev:
         prev_day, dist = prev
         try:
@@ -362,7 +366,8 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Append today's phash
     by_kho = phash_db.get(today_key, {})
     cur_list = set(by_kho.get(str(id_kho), []))
-    cur_list.add(phash_hex)
+    if phash_hex is not None:
+        cur_list.add(phash_hex)
     by_kho[str(id_kho)] = sorted(cur_list)
     phash_db[today_key] = by_kho
     save_phash_db(phash_db)
@@ -556,6 +561,8 @@ if __name__ == "__main__":
 PHASH_DB_PATH = "phash_history.json"  # {"YYYY-MM-DD": {"id_kho": ["hexhash", ...]}}
 
 def _phash_compute(image_bytes, hash_size: int = 16):
+    if Image is None:
+        return None
     """Compute perceptual hash (pHash) from bytes using DCT."""
     with Image.open(io.BytesIO(image_bytes)).convert("L") as img:
         img = img.resize((hash_size*4, hash_size*4), Image.LANCZOS)
