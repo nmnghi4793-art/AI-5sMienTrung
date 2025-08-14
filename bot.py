@@ -730,6 +730,7 @@ def _kv_key_from_text(kv_text):
         return "VanPhong"
     return "HangHoa"  # default
 
+d
 def _score_by_kv(photo_bytes: bytes, kv_text: str):
     img = cv2.imdecode(np.frombuffer(photo_bytes, np.uint8), cv2.IMREAD_COLOR)
     kv_key = _kv_key_from_text(kv_text)
@@ -1040,8 +1041,10 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if m_kv:
             kv_text = m_kv.group(1)
         reply_text = apply_scoring_rule(b, kv_text or "", is_duplicate=False)
-        item = apply_scoring_struct(b, kv_text or "", False)
-        key = _scoring_key(msg.chat_id, str(id_kho), d.strftime('%d/%m/%Y'))
+        dupkey = _dup_key(msg.chat_id, str(id_kho))
+        ngay_text = d.strftime('%d/%m/%Y')
+        item = apply_scoring_struct(b, kv_text or "", False, dupkey, ngay_text)
+        key = _scoring_key(msg.chat_id, str(id_kho), ngay_text)
         SCORING_BUFFER[key].append(item)
 
     await ack_photo_progress(context, msg.chat_id, id_kho, kho_map[id_kho], d, cur)
