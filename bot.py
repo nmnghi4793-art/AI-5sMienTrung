@@ -43,6 +43,20 @@ _DEFAULT_WEIGHTS = {
     "WC":      {"stain": 60, "trash": 25, "dry": 15},
     "KhoBai":  {"clean": 50, "obstacle": 30, "line": 20},
     "VanPhong":{"desk_tidy": 45, "surface_clean": 35, "cable": 20}
+
+# Ngưỡng để nêu vấn đề/khuyến nghị (0..1)
+_AREA_RULE_THRESHOLDS = {
+    "HangHoa": {"align": 0.70, "tidy": 0.60, "aisle": 0.70},
+    "WC":      {"stain": 0.80, "trash": 0.80, "dry": 0.70},
+    "KhoBai":  {"clean": 0.80, "obstacle": 0.75, "line": 0.70},
+    "VanPhong":{"desk_tidy": 0.75, "surface_clean": 0.80, "cable": 0.70}
+}
+try:
+    AREA_RULE_THRESHOLDS = json.loads(os.getenv("AREA_RULE_THRESHOLDS","") or "{}")
+    for k, v in _AREA_RULE_THRESHOLDS.items():
+        AREA_RULE_THRESHOLDS.setdefault(k, v)
+except Exception:
+    AREA_RULE_THRESHOLDS = _AREA_RULE_THRESHOLDS
 }
 try:
     AREA_RULE_WEIGHTS = json.loads(os.getenv("AREA_RULE_WEIGHTS","") or "{}")
@@ -105,6 +119,91 @@ async def _send_scoring_job(context: ContextTypes.DEFAULT_TYPE):
 def _day_key(d):
     return d.isoformat()
 
+
+# ==== GỘP TIN NHẮN CHẤM ĐIỂM (AGGREGATE) ====
+from collections import defaultdict
+SCORING_BUFFER = defaultdict(list)  # key -> list[dict]
+SCORING_JOBS = {}
+
+def _scoring_key(chat_id: int, id_kho: str, ngay_str: str) -> str:
+    return f"{chat_id}|{id_kho}|{ngay_str}"
+
+def apply_scoring_struct(photo_bytes: bytes, kv_active: str|None, is_duplicate: bool):
+    if not SCORING_ENABLED:
+        return {'total': 0, 'grade': 'C', 'issues': [], 'recs': [], 'dup': is_duplicate}
+    # Tính điểm & parts
+    img = cv2.imdecode(np.frombuffer(photo_bytes, np.uint8), cv2.IMREAD_COLOR)
+    sharp_s, bright_s, size_s, (w, h) = _score_quality_components(img)
+    q_score = 0.2 * (0.6 * sharp_s + 0.4 * bright_s)
+    parts, kv_key = _score_by_kv(photo_bytes, kv_active or "")
+    weights = AREA_RULE_WEIGHTS.get(kv_key, _DEFAULT_WEIGHTS[kv_key])
+    total_w = float(sum(weights.values())) or 100.0
+    content_s = 0.0
+    for name, val in parts.items():
+        content_s += (float(val) * (float(weights.get(name,0))/total_w) * 0.8)
+    dup_penalty = 0.10 if is_duplicate else 0.0
+    total_norm = max(0.0, q_score + content_s - dup_penalty)
+    total = int(round(total_norm*100))
+    grade = "A" if total >= 80 else ("B" if total >= 65 else "C")
+    issues, recs = _diagnose(kv_key, parts)
+    # Bổ sung chất lượng/dup
+    if sharp_s < 0.80:
+        issues.append("Ảnh hơi mờ/thiếu nét"); recs.append("Giữ chắc tay; chụp gần hơn nếu cần")
+    if bright_s < 0.80:
+        issues.append("Ảnh quá tối/hoặc quá sáng"); recs.append("Chụp nơi đủ sáng, tránh ngược sáng; bật đèn")
+    if size_s < 1.0:
+        issues.append("Kích thước ảnh nhỏ/thiếu chi tiết"); recs.append("Dùng độ phân giải cao hơn hoặc đứng gần hơn")
+    if is_duplicate:
+        issues.append("Ảnh bị trùng lặp với ảnh đã gửi"); recs.append("Gửi ảnh mới chụp cho khu vực tương ứng")
+    if total < 95 and not issues:
+        issues.append("Điểm chưa đạt 95/100 theo chuẩn 5S"); recs.append("Xem lại sắp xếp/vệ sinh/lối đi và chụp lại nếu cần")
+    return {'total': total, 'grade': grade, 'issues': issues, 'recs': recs, 'dup': is_duplicate}
+
+def _compose_aggregate_message(items: list, id_kho: str, ngay_str: str) -> str:
+    header = "🧮 *Điểm 5S cho lô ảnh này*\n" + f"- Kho: `{id_kho}` · Ngày: `{ngay_str}`\n"
+    lines = []
+    agg_issues, agg_recs = [], []
+    for idx, it in enumerate(items, 1):
+        lines.append(f"• Ảnh #{idx}: *{it['total']}/100* → Loại *{it['grade']}* · Trùng ảnh: {'❌' if it['dup'] else '✅'}")
+        agg_issues.extend(it.get('issues', [])); agg_recs.extend(it.get('recs', []))
+    def _uniq_first(xs, limit=5):
+        seen, out = set(), []
+        for x in xs:
+            if not x or x in seen: continue
+            seen.add(x); out.append(x)
+            if len(out) >= limit: break
+        return out
+    issues_u = _uniq_first(agg_issues, 5); recs_u = _uniq_first(agg_recs, 5)
+    msg = header + "\n" + "\n".join(lines)
+    if issues_u or recs_u:
+        msg += "\n\n⚠️ *Vấn đề:*" + "".join([f"\n • {x}" for x in issues_u])
+        msg += "\n\n🛠️ *Khuyến nghị:*" + "".join([f"\n • {x}" for x in recs_u])
+    return msg
+
+async def _send_scoring_aggregate(context: ContextTypes.DEFAULT_TYPE):
+    data = context.job.data or {}
+    key = data.get("key"); chat_id = data.get("chat_id"); id_kho = data.get("id_kho"); ngay_str = data.get("ngay")
+    items = SCORING_BUFFER.pop(key, []); SCORING_JOBS.pop(key, None)
+    if not items: return
+    text = _compose_aggregate_message(items, id_kho, ngay_str)
+    try:
+        await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        pass
+
+def schedule_scoring_aggregate(context, chat_id: int, id_kho: str, ngay_str: str, delay_seconds: int = 5):
+    key = _scoring_key(chat_id, id_kho, ngay_str)
+    old = SCORING_JOBS.get(key)
+    if old:
+        try: old.schedule_removal()
+        except Exception: pass
+    job = context.job_queue.run_once(
+        _send_scoring_aggregate, when=delay_seconds,
+        data={"key": key, "chat_id": chat_id, "id_kho": id_kho, "ngay": ngay_str},
+        name=f"score_agg_{key}"
+    )
+    SCORING_JOBS[key] = job
+# ==== HẾT PHẦN GỘP ====
 async def _warning_job(context):
     """Job chạy sau 6s kể từ lần ghi nhận gần nhất."""
     data = context.job.data or {}
@@ -353,7 +452,57 @@ def _kv_key_from_text(kv_text):
         return "VanPhong"
     return "HangHoa"  # default
 
-def apply_scoring_rule(photo_bytes: bytes, kv_text: str, is_duplicate: bool=False):
+d
+def _score_by_kv(photo_bytes: bytes, kv_text: str):
+    img = cv2.imdecode(np.frombuffer(photo_bytes, np.uint8), cv2.IMREAD_COLOR)
+    kv_key = _kv_key_from_text(kv_text)
+    if kv_key == "HangHoa":
+        parts = _score_hanghoa(img)
+    elif kv_key == "WC":
+        parts = _score_wc(img)
+    elif kv_key == "KhoBai":
+        parts = _score_khobai(img)
+    else:
+        parts = _score_vanphong(img)
+        kv_key = "VanPhong"
+    return parts, kv_key
+
+def _diagnose(kv_key: str, parts: dict):
+    th = AREA_RULE_THRESHOLDS.get(kv_key, _AREA_RULE_THRESHOLDS[kv_key])
+    issues, recs = [], []
+    if kv_key == "HangHoa":
+        if parts.get("align",1) < th["align"]:
+            issues.append("Hàng hóa chưa thẳng hàng / không song song kệ")
+            recs.append("Chỉnh thẳng kiện/thùng theo line hoặc mép kệ; dùng pallet một hướng")
+        if parts.get("tidy",1) < th["tidy"]:
+            issues.append("Khu vực bừa bộn, nhiều vật nhỏ rời rạc")
+            recs.append("Gom thùng rỗng, bỏ vật cản; phân khu rõ theo loại hàng")
+        if parts.get("aisle",1) < th["aisle"]:
+            issues.append("Lối đi bị hẹp hoặc có vật chắn")
+            recs.append("Giữ lối đi thông thoáng (≥ 1m), không xếp hàng lấn line")
+    elif kv_key == "WC":
+        if parts.get("stain",1) < th["stain"]:
+            issues.append("Bồn/sàn có vết bẩn/ố"); recs.append("Cọ rửa bồn, sàn; dùng dung dịch tẩy rửa định kỳ")
+        if parts.get("trash",1) < th["trash"]:
+            issues.append("Có rác/giấy vụn trên sàn"); recs.append("Thu gom rác; thêm thùng rác nắp; đổ rác cuối ca")
+        if parts.get("dry",1) < th["dry"]:
+            issues.append("Sàn ướt hoặc còn vệt nước"); recs.append("Lau khô sàn; treo biển cảnh báo sàn ướt khi vệ sinh")
+    elif kv_key == "KhoBai":
+        if parts.get("clean",1) < th["clean"]:
+            issues.append("Sàn kho bẩn / có nhiều mảng tối"); recs.append("Quét dọn/lau sàn theo tần suất; xử lý dầu tràn ngay")
+        if parts.get("obstacle",1) < th["obstacle"]:
+            issues.append("Có chướng ngại/lộn xộn ở lối đi"); recs.append("Di dời vật cản; quy định khu đặt đồ tạm không lấn line")
+        if parts.get("line",1) < th["line"]:
+            issues.append("Line kẻ chỉ dẫn mờ/khó thấy"); recs.append("Sơn/kẻ lại line; bổ sung biển báo vị trí")
+    else:  # VanPhong
+        if parts.get("desk_tidy",1) < th["desk_tidy"]:
+            issues.append("Bàn làm việc lộn xộn"); recs.append("Sắp xếp vật dụng; dùng khay/hộp phân loại; dọn bàn cuối ngày")
+        if parts.get("surface_clean",1) < th["surface_clean"]:
+            issues.append("Bề mặt có bụi/vết bẩn"); recs.append("Lau bề mặt bằng dung dịch phù hợp; lịch vệ sinh hằng ngày")
+        if parts.get("cable",1) < th["cable"]:
+            issues.append("Dây điện/cáp lộn xộn"); recs.append("Dùng kẹp/ống bọc dây; gom dây về một mép bàn/đế cố định")
+    return issues, recs
+ef apply_scoring_rule(photo_bytes: bytes, kv_text: str, is_duplicate: bool=False):
     img = cv2.imdecode(np.frombuffer(photo_bytes, np.uint8), cv2.IMREAD_COLOR)
     sharp_s, bright_s, size_s, (w,h) = _score_quality_components(img)
     q_score = 0.2 * (0.6*sharp_s + 0.4*bright_s)
@@ -617,12 +766,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Gửi đánh giá 5S thành 1 tin nhắn, trễ 5 giây sau khi báo ghi nhận
     if SCORING_ENABLED and SCORING_MODE == "rule":
         try:
-            context.job_queue.run_once(
-                _send_scoring_job,
-                when=5,
-                data={"chat_id": msg.chat_id, "text": compact_md},
-                name=f"score_{msg.chat_id}_{msg.message_id}"
-            )
+            schedule_scoring_aggregate(context, chat_id=msg.chat_id, id_kho=str(id_kho), ngay_str=d.strftime('%d/%m/%Y'), delay_seconds=5)
         except Exception:
             pass
 # ========= BÁO CÁO 21:00 =========
