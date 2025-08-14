@@ -562,13 +562,9 @@ def main():
     app.run_polling(close_loop=False)
 
 
+
 if __name__ == "__main__":
-    import asyncio
     app = build_app()
-    # Delete webhook to avoid Conflict when using polling
-    try:
-        asyncio.run(app.bot.delete_webhook(drop_pending_updates=False))
-        print("Webhook deleted (or none). Switching to polling...", flush=True)
-    except Exception as e:
-        print(f"delete_webhook error: {e}", flush=True)
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    # PTB 20.x: run_polling sẽ tự chuẩn bị event loop.
+    # Nếu trước đó bạn từng dùng webhook, PTB sẽ xoá webhook khi start polling.
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
