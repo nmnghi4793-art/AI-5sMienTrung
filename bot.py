@@ -302,6 +302,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
+    # --- caption-first parsing ---
+    incoming_caption = (msg.caption or '').strip() if hasattr(msg, 'caption') else ''
+    if incoming_caption:
+        try:
+            upsert_last_text(context, msg.chat_id, msg.from_user.id, incoming_caption)
+        except Exception:
+            pass
+    source_text = incoming_caption or (get_last_text(context, msg.chat_id, msg.from_user.id) or '')
     # --- caption-first parsing (handle photo + caption in same message) ---
     incoming_caption = (msg.caption or '').strip() if hasattr(msg, 'caption') else ''
     if incoming_caption:
@@ -438,6 +446,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_count_db(count_db)
 
     await ack_photo_progress(context, msg.chat_id, id_kho, kho_map[id_kho], d, cur)
+    await schedule_delayed_warning(context, msg.chat_id, id_kho, d)
     # Ensure delayed warning always scheduled (6s after ack)
     await schedule_delayed_warning(context, msg.chat_id, id_kho, d)
     # Đặt cảnh báo trễ 6s sau mỗi lần ghi nhận (job sẽ tự kiểm tra và chỉ gửi nếu <4 hoặc >4)
@@ -552,68 +561,14 @@ def main():
     print("Bot is running...")
     app.run_polling(close_loop=False)
 
+
 if __name__ == "__main__":
-    main()
-
-
-
-# ========= PERSISTENT pHASH (ẢNH QUÁ KHỨ) =========
-PHASH_DB_PATH = "phash_history.json"  # {"YYYY-MM-DD": {"id_kho": ["hexhash", ...]}}
-
-def _phash_compute(image_bytes, hash_size: int = 16):
-    if Image is None:
-        return None
-    """Compute perceptual hash (pHash) from bytes using DCT."""
-    with Image.open(io.BytesIO(image_bytes)).convert("L") as img:
-        img = img.resize((hash_size*4, hash_size*4), Image.LANCZOS)
-        arr = np.array(img, dtype=np.float32)
-    # 2D DCT via FFT trick
-    def dct_1d(a):
-        n = a.shape[0]
-        return np.real(np.fft.rfft(np.concatenate([a, a[::-1]], axis=0), axis=0)[:n])
-    dct_rows = dct_1d(arr)
-    dct2 = dct_1d(dct_rows.T).T
-    dctlow = dct2[:hash_size, :hash_size]
-    med = np.median(dctlow[1:, 1:]) if dctlow.size > 1 else np.median(dctlow)
-    bits = dctlow > med
-    flat = bits.flatten().astype(np.uint8)
-    val = 0
-    out = []
-    for i, b in enumerate(flat):
-        val = (val << 1) | int(b)
-        if (i & 7) == 7:
-            out.append(f"{val:02x}")
-            val = 0
-    if (len(flat) & 7) != 0:
-        shift = 8 - (len(flat) & 7)
-        out.append(f"{val<<shift:02x}")
-    return "".join(out)
-
-def _phash_hamming(hex1: str, hex2: str) -> int:
-    b1 = bytes.fromhex(hex1)
-    b2 = bytes.fromhex(hex2)
-    return sum(bin(x^y).count("1") for x, y in zip(b1, b2))
-
-def load_phash_db():
-    return _load_json(PHASH_DB_PATH, {})
-
-def save_phash_db(db):
-    _save_json(PHASH_DB_PATH, db)
-
-def is_past_duplicate(id_kho: str, today_str: str, hhex: str, db: dict, max_days: int = 90, thresh: int = 6):
-    """Check if hhex matches any previous-day hash for same kho within window using Hamming distance <= thresh."""
+    import asyncio
+    app = build_app()
+    # Delete webhook to avoid Conflict when using polling
     try:
-        all_days = sorted(db.keys())
-    except Exception:
-        return None
-    matches = []
-    for dkey in all_days:
-        if dkey >= today_str:
-            continue
-        by_kho = db.get(dkey, {})
-        lst = by_kho.get(str(id_kho), [])
-        for old in lst:
-            dist = _phash_hamming(hhex, old)
-            if dist <= thresh:
-                matches.append((dkey, dist))
-    return min(matches, key=lambda x: x[1]) if matches else None
+        asyncio.run(app.bot.delete_webhook(drop_pending_updates=False))
+        print("Webhook deleted (or none). Switching to polling...", flush=True)
+    except Exception as e:
+        print(f"delete_webhook error: {e}", flush=True)
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
