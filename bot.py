@@ -20,6 +20,8 @@ import os
 import re
 import json
 import hashlib
+import numpy as np
+from PIL import Image
 from datetime import datetime, date, time as dtime
 from zoneinfo import ZoneInfo
 
@@ -69,7 +71,7 @@ async def _warning_job(context):
     if cur > REQUIRED_PHOTOS:
         await context.bot.send_message(chat_id, f"⚠️ Đã gởi quá số ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
     elif cur < REQUIRED_PHOTOS:
-        await context.bot.send_message(chat_id, f"⚠️ Còn {REQUIRED_PHOTOS - cur} thiếu 1 ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
+        await context.bot.send_message(chat_id, f"⚠️ Còn thiếu {REQUIRED_PHOTOS - cur} ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
     # = 4 thì không gửi gì
 
 def schedule_delayed_warning(context, chat_id, id_kho, d):
@@ -338,7 +340,30 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     b = bytes(b)
     h = hashlib.md5(b).hexdigest()
 
-    # ===== CẢNH BÁO TRÙNG TRONG CÙNG LÔ (album) =====
+    # ---- pHash & Past-duplicate check (added) ----
+    phash_db = load_phash_db()
+    phash_hex = _phash_compute(b)
+    today_key = d.isoformat()
+    prev = is_past_duplicate(str(id_kho), today_key, phash_hex, phash_db, max_days=90, thresh=6)
+    if prev:
+        prev_day, dist = prev
+        try:
+            await msg.reply_text(f"⚠️ Ảnh này trùng/giống với ảnh đã gửi ngày {prev_day} (kho {id_kho}).")
+        except Exception:
+            pass
+    # Append today's phash
+    by_kho = phash_db.get(today_key, {})
+    cur_list = set(by_kho.get(str(id_kho), []))
+    cur_list.add(phash_hex)
+    by_kho[str(id_kho)] = sorted(cur_list)
+    phash_db[today_key] = by_kho
+    save_phash_db(phash_db)
+
+
+    
+
+
+# ===== CẢNH BÁO TRÙNG TRONG CÙNG LÔ (album) =====
     mg_hashes = context.chat_data.setdefault("mg_hashes", {})
     if mgid:
         seen = mg_hashes.setdefault(mgid, set())
@@ -513,3 +538,64 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+# ========= PERSISTENT pHASH (ẢNH QUÁ KHỨ) =========
+PHASH_DB_PATH = "phash_history.json"  # {"YYYY-MM-DD": {"id_kho": ["hexhash", ...]}}
+
+def _phash_compute(image_bytes, hash_size: int = 16):
+    """Compute perceptual hash (pHash) from bytes using DCT."""
+    with Image.open(io.BytesIO(image_bytes)).convert("L") as img:
+        img = img.resize((hash_size*4, hash_size*4), Image.LANCZOS)
+        arr = np.array(img, dtype=np.float32)
+    # 2D DCT via FFT trick
+    def dct_1d(a):
+        n = a.shape[0]
+        return np.real(np.fft.rfft(np.concatenate([a, a[::-1]], axis=0), axis=0)[:n])
+    dct_rows = dct_1d(arr)
+    dct2 = dct_1d(dct_rows.T).T
+    dctlow = dct2[:hash_size, :hash_size]
+    med = np.median(dctlow[1:, 1:]) if dctlow.size > 1 else np.median(dctlow)
+    bits = dctlow > med
+    flat = bits.flatten().astype(np.uint8)
+    val = 0
+    out = []
+    for i, b in enumerate(flat):
+        val = (val << 1) | int(b)
+        if (i & 7) == 7:
+            out.append(f"{val:02x}")
+            val = 0
+    if (len(flat) & 7) != 0:
+        shift = 8 - (len(flat) & 7)
+        out.append(f"{val<<shift:02x}")
+    return "".join(out)
+
+def _phash_hamming(hex1: str, hex2: str) -> int:
+    b1 = bytes.fromhex(hex1)
+    b2 = bytes.fromhex(hex2)
+    return sum(bin(x^y).count("1") for x, y in zip(b1, b2))
+
+def load_phash_db():
+    return _load_json(PHASH_DB_PATH, {})
+
+def save_phash_db(db):
+    _save_json(PHASH_DB_PATH, db)
+
+def is_past_duplicate(id_kho: str, today_str: str, hhex: str, db: dict, max_days: int = 90, thresh: int = 6):
+    """Check if hhex matches any previous-day hash for same kho within window using Hamming distance <= thresh."""
+    try:
+        all_days = sorted(db.keys())
+    except Exception:
+        return None
+    matches = []
+    for dkey in all_days:
+        if dkey >= today_str:
+            continue
+        by_kho = db.get(dkey, {})
+        lst = by_kho.get(str(id_kho), [])
+        for old in lst:
+            dist = _phash_hamming(hhex, old)
+            if dist <= thresh:
+                matches.append((dkey, dist))
+    return min(matches, key=lambda x: x[1]) if matches else None
