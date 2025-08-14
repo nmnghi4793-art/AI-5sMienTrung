@@ -69,7 +69,7 @@ async def _warning_job(context):
     if cur > REQUIRED_PHOTOS:
         await context.bot.send_message(chat_id, f"⚠️ Đã gởi quá số ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
     elif cur < REQUIRED_PHOTOS:
-        await context.bot.send_message(chat_id, f"⚠️ Còn {REQUIRED_PHOTOS - cur} thiếu 1 ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
+        await context.bot.send_message(chat_id, f"⚠️ Còn thiếu {REQUIRED_PHOTOS - cur} ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
     # = 4 thì không gửi gì
 
 def schedule_delayed_warning(context, chat_id, id_kho, d):
