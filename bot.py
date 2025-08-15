@@ -748,6 +748,20 @@ def _score_vanphong(img_bgr):
     cable = float(max(0.0, 1.0 - min(cable_density/0.35, 1.0)))
     return {"desk_tidy": desk_tidy, "surface_clean": surface_clean, "cable": cable}
 
+
+def _extract_id_date_loose(text: str, tz: ZoneInfo):
+    if not text: text = ""
+    import re as _re
+    m_id = _re.search(r"(\d{6,})", text)
+    id_kho = m_id.group(1) if m_id else None
+    m_day = _re.search(r"(?:(?:ngày|ngay|date)\s*[:\-]?)?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})", text, _re.IGNORECASE)
+    if m_day:
+        d = datetime.strptime(m_day.group(1).replace('-', '/'), "%d/%m/%Y")
+        d = datetime(d.year, d.month, d.day, tzinfo=tz)
+    else:
+        now = datetime.now(tz); d = datetime(now.year, now.month, now.day, tzinfo=tz)
+    return id_kho, d
+
 def _kv_key_from_text(kv_text):
     kv = (kv_text or "").strip().lower()
     if "hanghoa" in kv or "hàng" in kv or "hang" in kv:
@@ -982,12 +996,11 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not id_kho or not isinstance(d, datetime):
         try:
             id_kho2, d2 = _extract_id_date_loose(caption_from_group or "", ZONE)
-            if not id_kho:
-                id_kho = id_kho2
-            if not isinstance(d, datetime):
-                d = d2
+            id_kho = id_kho or id_kho2
+            d = d if isinstance(d, datetime) else d2
         except Exception:
             pass
+
 
     if not id_kho:
         await msg.reply_text(
