@@ -978,6 +978,16 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # parse
     id_kho, d = parse_text_for_id_and_date(caption_from_group)
     kho_map = context.bot_data["kho_map"]
+    # Fallback: nếu không bắt được id_kho/ngày từ caption theo mẫu cũ
+    if not id_kho or not isinstance(d, datetime):
+        try:
+            id_kho2, d2 = _extract_id_date_loose(caption_from_group or "", ZONE)
+            if not id_kho:
+                id_kho = id_kho2
+            if not isinstance(d, datetime):
+                d = d2
+        except Exception:
+            pass
 
     if not id_kho:
         await msg.reply_text(
@@ -1027,7 +1037,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Trùng lịch sử -> chỉ cảnh báo và thoát
+    # Trùng lịch sử -> log quá khứ (lấy ngày sớm nhất)
     dups = [item for item in hash_db["items"] if item.get("hash") == h]
     if dups:
         prev_dates = sorted(set([it.get("date") for it in dups if it.get("date") != d.isoformat()]))
