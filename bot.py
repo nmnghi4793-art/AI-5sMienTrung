@@ -1029,16 +1029,16 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Trùng lịch sử -> log quá khứ (lấy ngày sớm nhất)
     dups = [item for item in hash_db["items"] if item.get("hash") == h]
-if dups:
-    prev_dates = sorted(set([it.get("date") for it in dups if it.get("date") != d.isoformat()]))
-    if prev_dates:
-        prev_str = datetime.fromisoformat(prev_dates[0]).strftime("%d/%m/%Y")
-        log_past_use(id_kho=id_kho, prev_date=prev_dates[0], h=h, today=d)
-        warn = f"⚠️ Ảnh *trùng* với ảnh đã gửi ngày {prev_str}. Vui lòng chụp ảnh mới khác để tránh trùng lặp."
-    else:
-        warn = "⚠️ Ảnh *trùng* với ảnh đã gửi trước đây. Vui lòng chụp ảnh mới khác để tránh trùng lặp."
-    await msg.reply_text(warn, parse_mode=ParseMode.MARKDOWN)
-    return
+    if dups:
+        prev_dates = sorted(set([it.get("date") for it in dups if it.get("date") != d.isoformat()]))
+        if prev_dates:
+            prev_str = datetime.fromisoformat(prev_dates[0]).strftime("%d/%m/%Y")
+            log_past_use(id_kho=id_kho, prev_date=prev_dates[0], h=h, today=d)
+            warn = f"⚠️ Ảnh *trùng* với ảnh đã gửi ngày {prev_str}. Vui lòng chụp ảnh mới khác để tránh trùng lặp."
+        else:
+            warn = "⚠️ Ảnh *trùng* với ảnh đã gửi trước đây. Vui lòng chụp ảnh mới khác để tránh trùng lặp."
+        await msg.reply_text(warn, parse_mode=ParseMode.MARKDOWN)
+        return
 
     # ===== GHI NHẬN ẢNH HỢP LỆ =====
     # ghi nhận nộp
