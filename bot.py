@@ -1298,3 +1298,206 @@ SIMPLE_SIMPLE_REC_BANK = {
     }
 }
 # ======= END SIMPLE BANKS =======
+
+
+
+# ========= USER SIMPLE PHRASES (ngắn gọn – đa dạng, ưu tiên HangHoa) =========
+def _prepend_unique(dst: dict, kv: str, cat: str, items: list):
+    kvd = dst.setdefault(kv, {})
+    arr = kvd.setdefault(cat, [])
+    for s in reversed(items):
+        if s not in arr:
+            arr.insert(0, s)
+
+def _apply_user_simple_overlay_all():
+    # ===== HANG HOA (ưu tiên hàng cồng kềnh) =====
+    _prepend_unique(SIMPLE_ISSUE_BANK, "HangHoa", "tidy", [
+        "Hàng hóa không được sắp xếp gọn gàng",
+        "Cần cải thiện vệ sinh khu vực",
+        "Thiếu nhãn mác cho hàng hóa",
+        "Thùng rỗng chưa gom",
+        "Màng PE thừa/chưa cắt gọn",
+        "Bao bì rách chưa xử lý",
+        "Dụng cụ tạm đặt sai vị trí",
+        "Khu vực chất hàng bừa bộn",
+        "Có hàng đặt trực tiếp xuống sàn",
+        "Tem cũ chưa bóc trước khi dán tem mới"
+    ])
+    _prepend_unique(SIMPLE_ISSUE_BANK, "HangHoa", "align", [
+        "Một số pallet có hàng hóa chất đống",
+        "Hàng không thẳng hàng theo mép kệ",
+        "Pallet xoay khác hướng còn lại",
+        "Có khoảng hở giữa các kiện",
+        "Kiện chồng cao, dễ mất cân bằng",
+        "Thùng nhô ra mép pallet",
+        "Xếp chồng chưa đồng đều chiều cao",
+        "Nẹp góc thiếu hoặc lỏng",
+        "Thùng méo/xẹp ảnh hưởng xếp chồng",
+        "Hàng đặt lệch line đánh dấu"
+    ])
+    _prepend_unique(SIMPLE_ISSUE_BANK, "HangHoa", "aisle", [
+        "Không có lối đi rõ ràng giữa các khu vực",
+        "Lối đi bị lấn bởi hàng hóa",
+        "Vạch an toàn mờ/khó thấy",
+        "Có vật cản trong đường đi xe nâng",
+        "Chất lỏng rơi vãi trên sàn",
+        "Hàng vượt qua vạch giới hạn"
+    ])
+    _prepend_unique(SIMPLE_ISSUE_BANK, "HangHoa", "bulky", [
+        "Hàng cồng kềnh chưa cố định",
+        "Dây đai lỏng hoặc thiếu",
+        "Thiếu nẹp góc cho kiện lớn",
+        "Đặt sai hướng nâng hạ",
+        "Thiếu cảnh báo kích thước/tải trọng",
+        "Điểm tựa/đệm kê không chắc chắn"
+    ])
+
+    _prepend_unique(SIMPLE_REC_BANK, "HangHoa", "tidy", [
+        "Sắp xếp hàng hóa theo loại và kích thước",
+        "Dọn dẹp khu vực để đảm bảo sạch sẽ",
+        "Thêm nhãn mác cho hàng hóa",
+        "Thực hiện kiểm tra định kỳ về 5S",
+        "Gom thùng rỗng về khu tập kết",
+        "Cắt gọn màng PE thừa",
+        "Dán lại nhãn rõ ràng, dễ đọc",
+        "Loại bỏ bao bì rách, thay mới",
+        "Thu hồi dụng cụ về đúng vị trí",
+        "Không đặt hàng trực tiếp xuống sàn"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "HangHoa", "align", [
+        "Căn thẳng theo mép kệ/vạch chỉ dẫn",
+        "Xoay cùng một hướng cho toàn bộ kiện",
+        "San phẳng chiều cao giữa các lớp",
+        "Bổ sung nẹp góc để giữ thẳng",
+        "Đặt sát mép trong của pallet",
+        "Kiểm tra cân bằng trước khi rời vị trí"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "HangHoa", "aisle", [
+        "Tạo lối đi rõ ràng giữa các pallet",
+        "Giữ lối đi thông thoáng ≥ 1m",
+        "Sơn/khôi phục lại vạch an toàn",
+        "Di dời vật cản khỏi đường xe nâng",
+        "Lau khô sàn, xử lý ngay chất đổ",
+        "Không vượt qua vạch giới hạn"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "HangHoa", "bulky", [
+        "Đai cố định chắc chắn các kiện lớn",
+        "Thêm nẹp góc/đệm bảo vệ cho cạnh bén",
+        "Sắp xếp theo hướng thuận lợi nâng hạ",
+        "Ghi rõ kích thước/tải trọng trên nhãn",
+        "Chèn thêm điểm tựa chống xê dịch"
+    ])
+
+    # ===== KE PALLET =====
+    _prepend_unique(SIMPLE_ISSUE_BANK, "KePallet", "align", [
+        "Pallet lệch mép kệ",
+        "Kiện chồng quá cao mức cho phép",
+        "Thanh giằng không cân đối",
+        "Khoảng cách an toàn đỉnh kệ không đủ"
+    ])
+    _prepend_unique(SIMPLE_ISSUE_BANK, "KePallet", "tidy", [
+        "Pallet hỏng chưa loại bỏ",
+        "Mảnh gỗ vụn còn trên sàn",
+        "Tem cũ còn sót lại",
+        "Màng PE dư chưa cắt"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "KePallet", "align", [
+        "Căn thẳng mép pallet theo tiêu chuẩn",
+        "Không chồng quá quy định chiều cao",
+        "Kiểm tra thanh giằng và cân chỉnh lại",
+        "Đảm bảo khoảng cách an toàn phần đầu kệ"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "KePallet", "tidy", [
+        "Loại bỏ pallet hỏng ngay",
+        "Quét dọn sạch mảnh gỗ vụn",
+        "Bóc tem cũ trước khi dán mới",
+        "Cắt gọn màng PE thừa"
+    ])
+
+    # ===== LOI DI =====
+    _prepend_unique(SIMPLE_ISSUE_BANK, "LoiDi", "aisle", [
+        "Lối đi có vật cản",
+        "Vạch dẫn hướng mờ/đứt đoạn",
+        "Hàng lấn sang lối đi",
+        "Có chất lỏng rơi vãi",
+        "Thiếu biển hướng dẫn",
+        "Lối thoát hiểm chưa thông thoáng"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "LoiDi", "aisle", [
+        "Dọn sạch vật cản ngay",
+        "Sơn lại vạch dẫn hướng",
+        "Sắp xếp lại hàng vượt vạch",
+        "Lau sạch và xử lý chất đổ",
+        "Bổ sung biển hướng dẫn rõ ràng",
+        "Đảm bảo lối thoát hiểm thông suốt"
+    ])
+
+    # ===== VAN PHONG =====
+    _prepend_unique(SIMPLE_ISSUE_BANK, "VanPhong", "tidy", [
+        "Bàn có bụi và giấy tờ lộn xộn",
+        "Dụng cụ tản mát, chưa có khay",
+        "Màn hình/bàn phím bám bẩn",
+        "Dây cáp rối dưới chân bàn",
+        "Thùng rác đầy chưa đổ",
+        "Nhiều vật nhỏ rơi vãi"
+    ])
+    _prepend_unique(SIMPLE_ISSUE_BANK, "VanPhong", "align", [
+        "Vật dụng đặt chưa ngay ngắn",
+        "Tài liệu chưa xếp thẳng mép",
+        "Màn hình/đế đỡ lệch"
+    ])
+    _prepend_unique(SIMPLE_ISSUE_BANK, "VanPhong", "aisle", [
+        "Lối đi bị vướng đồ",
+        "Túi đồ để dưới chân ghế"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "VanPhong", "tidy", [
+        "Lau bụi bề mặt, khử khuẩn",
+        "Xếp giấy tờ theo nhóm/chủ đề",
+        "Dùng khay/hộp chia ô cho dụng cụ",
+        "Buộc gọn dây cáp sát chân bàn",
+        "Đổ rác ngay khi đầy"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "VanPhong", "align", [
+        "Sắp xếp đồ ngay ngắn, cố định vị trí",
+        "Căn thẳng theo mép bàn/kệ"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "VanPhong", "aisle", [
+        "Dẹp đồ khỏi lối đi",
+        "Không đặt túi đồ dưới lối chân"
+    ])
+
+    # ===== WC =====
+    _prepend_unique(SIMPLE_ISSUE_BANK, "WC", "stain", [
+        "Bề mặt/thiết bị còn vết bẩn",
+        "Gương và tay nắm chưa sạch",
+        "Vết ố quanh vòi rửa"
+    ])
+    _prepend_unique(SIMPLE_ISSUE_BANK, "WC", "trash", [
+        "Thùng rác đầy",
+        "Rác chưa gom gọn",
+        "Túi rác không thay"
+    ])
+    _prepend_unique(SIMPLE_ISSUE_BANK, "WC", "dry", [
+        "Sàn còn ướt",
+        "Có vệt nước đọng"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "WC", "stain", [
+        "Cọ rửa bằng dung dịch phù hợp",
+        "Lau sạch gương, tay nắm",
+        "Chà sạch vết ố quanh vòi"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "WC", "trash", [
+        "Đổ rác ngay khi đầy",
+        "Thay túi rác mới, dùng thùng có nắp"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "WC", "dry", [
+        "Lau khô sàn",
+        "Đặt biển cảnh báo khi sàn ướt"
+    ])
+
+try:
+    _apply_user_simple_overlay_all()
+except Exception:
+    pass
+# ========= END USER SIMPLE PHRASES =========
+
