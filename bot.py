@@ -325,54 +325,24 @@ def _pick_many(pool: list, k: int = 2) -> list:
 def _kv_for_variety(kv_key: str) -> str:
     return kv_key if kv_key in ISSUE_BANK else "VanPhong"
 
-
-def _diagnose_varied(kv_key: str, parts: dict, hint_text: str = "") -> tuple[list, list]:
+def _diagnose_varied(kv_key: str, parts: dict) -> tuple[list, list]:
     """
-    Sinh 'Vấn đề/Khuyến nghị' đa dạng theo KV & hạng mục dưới ngưỡng.
-    Ưu tiên Hàng Cồng Kềnh (bulky) nếu:
-      - KV là HangHoa và caption/hint có từ khóa bulky, hoặc
-      - chỉ số lối đi (aisle) quá thấp → suy đoán bulky gây cản trở.
+    Sinh 'Vấn đề/Khuyến nghị' đa dạng theo KV & hạng mục bị dưới ngưỡng.
     """
     kv = _kv_for_variety(kv_key)
     th = AREA_RULE_THRESHOLDS.get(kv, _AREA_RULE_THRESHOLDS[kv])
 
     # Seed theo thời điểm để câu chữ đổi linh hoạt
-    import time as _t, random as _rnd
-    _rnd.seed(hash(f"{kv}{_t.time_ns()}") % (2**32))
-
-    # Nhận diện bulky
-    hint = (hint_text or "").lower()
-    bulky_flag = False
-    if kv == "HangHoa":
-        if any(kw in hint for kw in BULKY_KEYWORDS):
-            bulky_flag = True
-        else:
-            # nếu lối đi quá hẹp thì ưu tiên coi là case bulky
-            try:
-                aisle_val = float(parts.get("aisle", 1))
-            except Exception:
-                aisle_val = 1.0
-            if aisle_val < 0.60:
-                bulky_flag = True
+    random.seed(hash(f"{kv}{time.time_ns()}") % (2**32))
 
     issues, recs = [], []
-    # 1) Lấy câu theo từng hạng mục dưới ngưỡng
     for metric, val in parts.items():
-        try:
-            v = float(val)
-        except Exception:
-            v = 1.0
         thr = th.get(metric, 0.75)
-        if v < float(thr):  # dưới ngưỡng → nêu vấn đề & gợi ý
+        if float(val) < float(thr):  # dưới ngưỡng → nêu vấn đề & gợi ý
             issues += _pick_many(ISSUE_BANK.get(kv, {}).get(metric, []), k=2)
             recs   += _pick_many(REC_BANK.get(kv, {}).get(metric, []),   k=2)
 
-    # 2) Bổ sung riêng cho Hàng Cồng Kềnh (nếu áp dụng)
-    if bulky_flag:
-        issues += _pick_many(BULKY_ISSUE, k=2)
-        recs   += _pick_many(BULKY_REC,   k=2)
-
-    # 3) Khử trùng lặp & rút gọn
+    # Khử trùng lặp & rút gọn tối đa 5 ý mỗi phần
     def _dedup(xs, limit=5):
         seen, out = set(), []
         for x in xs:
@@ -382,7 +352,7 @@ def _diagnose_varied(kv_key: str, parts: dict, hint_text: str = "") -> tuple[lis
         return out
 
     return _dedup(issues, 5), _dedup(recs, 5)
-# ==== END BULKY VARIETY ====
+# ========== END DIAGNOSTICS VARIETY ==========
 def apply_scoring_struct(photo_bytes: bytes, kv_active: str|None, is_duplicate: bool, dup_key: str, ngay_str: str):
     """
     Trả về cấu trúc cho gộp: {'total','grade','issues','recs','dup','sim','dup_date'}
@@ -426,7 +396,7 @@ def apply_scoring_struct(photo_bytes: bytes, kv_active: str|None, is_duplicate: 
     grade = "A" if total >= 80 else ("B" if total >= 65 else "C")
 
     # 6) Vấn đề / Khuyến nghị
-    issues, recs = _diagnose_varied(kv_key, parts, hint_text=kv_active or "")
+    issues, recs = _diagnose_varied(kv_key, parts)
     if sharp_s < 0.80:
         issues.append("Ảnh hơi mờ/thiếu nét")
         recs.append("Giữ chắc tay hoặc tựa vào bề mặt; chụp gần hơn nếu cần")
@@ -529,7 +499,7 @@ async def _warning_job(context):
     if cur > REQUIRED_PHOTOS:
         await context.bot.send_message(chat_id, f"⚠️ Đã gởi quá số ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
     elif cur < REQUIRED_PHOTOS:
-        await context.bot.send_message(chat_id, f"⚠️ Còn thiếu {REQUIRED_PHOTOS - cur} ảnh so với quy định ({REQUIRED_PHOTOS} ảnh)")
+        await context.bot.send_message(chat_id, f"⚠️ Còn {REQUIRED_PHOTOS - cur} thiếu 1 ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
     # = 4 thì không gửi gì
 
 def schedule_delayed_warning(context, chat_id, id_kho, d):
@@ -747,20 +717,6 @@ def _score_vanphong(img_bgr):
     cable_density = float((edges>0).mean())
     cable = float(max(0.0, 1.0 - min(cable_density/0.35, 1.0)))
     return {"desk_tidy": desk_tidy, "surface_clean": surface_clean, "cable": cable}
-
-
-def _extract_id_date_loose(text: str, tz: ZoneInfo):
-    if not text: text = ""
-    import re as _re
-    m_id = _re.search(r"(\d{6,})", text)
-    id_kho = m_id.group(1) if m_id else None
-    m_day = _re.search(r"(?:(?:ngày|ngay|date)\s*[:\-]?)?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})", text, _re.IGNORECASE)
-    if m_day:
-        d = datetime.strptime(m_day.group(1).replace('-', '/'), "%d/%m/%Y")
-        d = datetime(d.year, d.month, d.day, tzinfo=tz)
-    else:
-        now = datetime.now(tz); d = datetime(now.year, now.month, now.day, tzinfo=tz)
-    return id_kho, d
 
 def _kv_key_from_text(kv_text):
     kv = (kv_text or "").strip().lower()
@@ -992,15 +948,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # parse
     id_kho, d = parse_text_for_id_and_date(caption_from_group)
     kho_map = context.bot_data["kho_map"]
-    # Fallback: nếu không bắt được id_kho/ngày từ caption theo mẫu cũ
-    if not id_kho or not isinstance(d, datetime):
-        try:
-            id_kho2, d2 = _extract_id_date_loose(caption_from_group or "", ZONE)
-            id_kho = id_kho or id_kho2
-            d = d if isinstance(d, datetime) else d2
-        except Exception:
-            pass
-
 
     if not id_kho:
         await msg.reply_text(
@@ -1055,12 +1002,11 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if dups:
         prev_dates = sorted(set([it.get("date") for it in dups if it.get("date") != d.isoformat()]))
         if prev_dates:
-            prev_str = datetime.fromisoformat(prev_dates[0]).strftime("%d/%m/%Y")
             log_past_use(id_kho=id_kho, prev_date=prev_dates[0], h=h, today=d)
-            warn = f"⚠️ Ảnh *trùng* với ảnh đã gửi ngày {prev_str}. Vui lòng chụp ảnh mới khác để tránh trùng lặp."
-        else:
-            warn = "⚠️ Ảnh *trùng* với ảnh đã gửi trước đây. Vui lòng chụp ảnh mới khác để tránh trùng lặp."
-        await msg.reply_text(warn, parse_mode=ParseMode.MARKDOWN)
+        await msg.reply_text(
+            "⚠️ Ảnh *trùng* với ảnh đã gửi trước đây. Vui lòng chụp ảnh mới khác để tránh trùng lặp.",
+            parse_mode=ParseMode.MARKDOWN
+        )
         return
 
     # ===== GHI NHẬN ẢNH HỢP LỆ =====
