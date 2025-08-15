@@ -1298,3 +1298,14 @@ SIMPLE_SIMPLE_REC_BANK = {
     }
 }
 # ======= END SIMPLE BANKS =======
+
+
+# ======= OVERRIDE BANKS TO USE SIMPLE FORMAT =======
+# Dùng bộ câu ngắn gọn (SIMPLE_SIMPLE_*) cho phần 'Vấn đề/Khuyến nghị'
+try:
+    SIMPLE_ISSUE_BANK = SIMPLE_SIMPLE_ISSUE_BANK
+    SIMPLE_REC_BANK = SIMPLE_SIMPLE_REC_BANK
+except NameError:
+    # Nếu không có bank đơn giản thì giữ nguyên
+    pass
+# ======= END OVERRIDE =======
