@@ -442,7 +442,7 @@ def _compose_aggregate_message(items: list, id_kho: str, ngay_str: str) -> str:
                 dup_txt = "❌"
         else:
             dup_txt = "✅"
-        lines.append(f"• Ảnh #{idx}: *{it['total']}/100* → Loại *{it['grade']}* · Trùng ảnh: {dup_txt}")
+        lines.append(f"• Ảnh #{idx}: *{it['total']}/100* → Loại *{it['grade']}* ·: {dup_txt}")
         agg_issues.extend(it.get('issues', [])); agg_recs.extend(it.get('recs', []))
     def _uniq_first(xs, limit=5):
         seen, out = set(), []
