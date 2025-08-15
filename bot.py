@@ -1021,6 +1021,13 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if item.get("hash") == h and item.get("id_kho") == id_kho and item.get("date") == d.isoformat()
     ]
     if same_day_dups:
+        # GỬI TIẾN ĐỘ (không tăng số lượng) TRƯỚC KHI THOÁT
+        count_db = load_count_db()
+        cur_tmp = get_count(count_db, id_kho, d)
+        try:
+            await ack_photo_progress(context, msg.chat_id, id_kho, kho_map[id_kho], d, cur_tmp)
+        except Exception:
+            pass
         await msg.reply_text(
             f"⚠️ Kho *{kho_map[id_kho]}* hôm nay đã có 1 ảnh *giống hệt* ảnh này. Vui lòng thay ảnh khác.",
             parse_mode=ParseMode.MARKDOWN
@@ -1037,6 +1044,13 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             warn = f"⚠️ Ảnh *trùng* với ảnh đã gửi ngày {prev_str}. Vui lòng chụp ảnh mới khác để tránh trùng lặp."
         else:
             warn = "⚠️ Ảnh *trùng* với ảnh đã gửi trước đây. Vui lòng chụp ảnh mới khác để tránh trùng lặp."
+        # GỬI TIẾN ĐỘ (không tăng số lượng) TRƯỚC KHI THOÁT
+        count_db = load_count_db()
+        cur_tmp = get_count(count_db, id_kho, d)
+        try:
+            await ack_photo_progress(context, msg.chat_id, id_kho, kho_map[id_kho], d, cur_tmp)
+        except Exception:
+            pass
         await msg.reply_text(warn, parse_mode=ParseMode.MARKDOWN)
         return
 
