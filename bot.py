@@ -337,6 +337,9 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     b = await tg_file.download_as_bytearray()
     b = bytes(b)
     h = hashlib.md5(b).hexdigest()
+    total, grade, _m = _img_metrics_from_bytes(b)
+    key_buf = (msg.chat_id, str(id_kho), d.isoformat())
+    SCORING_BUFFER.setdefault(key_buf, []).append({'total': total, 'grade': grade})
 
     # ===== CẢNH BÁO TRÙNG TRONG CÙNG LÔ (album) =====
     mg_hashes = context.chat_data.setdefault("mg_hashes", {})
@@ -402,11 +405,11 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await ack_photo_progress(context, msg.chat_id, id_kho, kho_map[id_kho], d, cur)
     # Đặt cảnh báo trễ 6s sau mỗi lần ghi nhận (job sẽ tự kiểm tra và chỉ gửi nếu <4 hoặc >4)
     schedule_delayed_warning(context, msg.chat_id, id_kho, d)
-
-    # Khi đủ ảnh, gửi gợi ý cải thiện 5S (format đơn giản) sau 5s
-    if cur >= REQUIRED_PHOTOS:
+    cur2 = get_count(load_count_db(), id_kho, d)
+    if cur2 >= REQUIRED_PHOTOS:
         kv = _detect_kv_from_text(caption_from_group or caption)
-        schedule_simple_feedback(context, msg.chat_id, id_kho, d, kv, kho_map[id_kho])
+        schedule_scoring_aggregate(context, msg.chat_id, id_kho, d, kho_map[id_kho], kv)
+
 # ========= BÁO CÁO 21:00 =========
 def get_missing_ids_for_day(kho_map, submit_db, d: date):
     submitted = set(submit_db.get(d.isoformat(), []))
@@ -520,16 +523,38 @@ if __name__ == "__main__":
     main()
 
 
-# ======= SIMPLE 5S FEEDBACK (ngắn gọn, dễ hiểu) =======
+# ========= 5S SCORING & SIMPLE FEEDBACK =========
+import numpy as _np
+import cv2 as _cv
+
+def _img_metrics_from_bytes(b: bytes):
+    """Tính điểm cơ bản từ ảnh: nét (blur), sáng (brightness). Trả về (score, grade, m)."""
+    try:
+        arr = _np.frombuffer(b, dtype=_np.uint8)
+        img = _cv.imdecode(arr, _cv.IMREAD_COLOR)
+        if img is None:
+            return 60, "C", {"sharp": 0.3, "bright": 0.5}
+        gray = _cv.cvtColor(img, _cv.COLOR_BGR2GRAY)
+        # Sharpness via Laplacian variance (normalize roughly)
+        fm = _cv.Laplacian(gray, _cv.CV_64F).var()
+        sharp = float(min(1.0, max(0.0, (fm / 200.0))))  # 0..1
+        # Brightness via mean
+        mean = float(gray.mean())
+        bright = float(min(1.0, max(0.0, (mean / 180.0))))  # 0..1
+        # Simple rule total
+        total = int(round(100 * (0.6*sharp + 0.4*bright)))
+        grade = "A" if total >= 80 else ("B" if total >= 70 else "C")
+        m = {"sharp": round(sharp, 2), "bright": round(bright, 2), "w": img.shape[1], "h": img.shape[0]}
+        return total, grade, m
+    except Exception:
+        return 55, "C", {"sharp": 0.0, "bright": 0.0}
+
+# Banks ngắn gọn
 SIMPLE_ISSUE_BANK = {
     "VanPhong": {
-        "tidy": [
-            "Bàn có nhiều bụi","Giấy tờ để lộn xộn","Dụng cụ chưa gọn","Màn hình chưa sạch","Dây cáp rối",
-            "Ly tách/đồ ăn để trên bàn","Khăn giấy bừa bộn","Ngăn kéo lộn xộn","Bề mặt dính bẩn","Bàn phím/bàn di bẩn",
-            "Ghế không ngay vị trí","Thùng rác đầy","Nhiều vật nhỏ rơi vãi","Kệ tài liệu chưa phân khu","Bảng ghi chú rối mắt"
-        ],
+        "tidy": ["Bàn có nhiều bụi","Giấy tờ để lộn xộn","Dụng cụ chưa gọn","Màn hình chưa sạch","Dây cáp rối","Ly tách/đồ ăn trên bàn","Khăn giấy bừa bộn","Ngăn kéo lộn xộn","Bề mặt dính bẩn","Bàn phím/bàn di bẩn","Ghế không ngay vị trí","Thùng rác đầy","Nhiều vật nhỏ rơi vãi","Kệ tài liệu chưa phân khu","Bảng ghi chú rối mắt"],
         "align": ["Vật dụng đặt chưa ngay ngắn","Đồ đạc lệch vị trí","Tài liệu chưa xếp thẳng mép","Màn hình/đế đỡ lệch","Bút, sổ chưa theo hàng"],
-        "aisle": ["Lối đi bị vướng đồ","Có vật cản dưới chân bàn","Dây điện vắt ngang lối đi","Thùng carton chắn lối","Túi đồ để dưới chân ghế"]
+        "aisle": ["Lối đi bị vướng đồ","Có vật cản dưới chân bàn","Dây điện vắt ngang lối đi","Thùng carton chắn lối","Túi đồ dưới chân ghế"]
     },
     "WC": {
         "stain": ["Bồn/bề mặt còn vết bẩn","Gương, tay nắm chưa sạch","Vết ố quanh vòi","Vệt nước trên gương","Vách ngăn bám bẩn","Sàn bám cặn"],
@@ -538,30 +563,29 @@ SIMPLE_ISSUE_BANK = {
         "supply": ["Thiếu giấy/xà phòng","Thiếu khăn lau tay","Bình xịt trống","Chưa bổ sung vật tư"]
     },
     "HangHoa": {
-        "align": ["Hàng chưa thẳng hàng","Pallet xoay khác hướng","Có khoảng hở trong dãy xếp","Thùng nhô ra mép kệ","Kiện cao thấp không đều","Hàng lệch line vạch","Thùng xẹp/biến dạng","Xếp chồng mất cân bằng"],
-        "tidy": ["Khu vực còn bừa bộn","Thùng rỗng chưa gom","Vật tạm đặt sai chỗ","Màng PE rách vương vãi","Dụng cụ chưa trả về vị trí","Bao bì rách chưa xử lý","Nhãn mác bong tróc","Có hàng đặt trực tiếp xuống sàn"],
-        "aisle": ["Lối đi bị lấn","Đồ cản trở đường đi","Pallet để dưới line","Hàng vượt vạch an toàn","Khu vực thao tác chật hẹp"],
+        "align": ["Hàng chưa thẳng hàng","Pallet xoay khác hướng","Có khoảng hở/nhô ra trong dãy xếp","Thùng nhô ra mép kệ","Kiện cao thấp không đều","Hàng lệch line/vạch","Thùng xẹp/biến dạng","Xếp chồng mất cân bằng"],
+        "tidy": ["Khu vực bừa bộn","Thùng rỗng chưa gom","Vật tạm đặt sai khu vực","Màng PE rách vương vãi","Dụng cụ chưa trả về vị trí","Bao bì rách chưa xử lý","Nhãn mác bong tróc","Có hàng đặt trực tiếp xuống sàn"],
+        "aisle": ["Lối đi bị lấn","Đồ cản trở đường đi","Pallet để dưới line","Hàng vượt vạch an toàn","Khu thao tác chật hẹp"],
         "bulky": ["Hàng cồng kềnh chưa cố định","Dây đai lỏng","Điểm tựa không chắc","Đặt sai hướng nâng hạ","Thiếu nẹp góc/đệm bảo vệ","Chưa dán nhãn cảnh báo kích thước/tải trọng"]
     },
     "LoiDi": {
-        "aisle": ["Lối đi có vật cản","Vạch sơn mờ","Hàng lấn sang lối đi","Có chất lỏng rơi vãi","Thiếu biển chỉ dẫn","Lối thoát hiểm chưa thông thoáng","Xe đẩy dừng sai vị trí"]
+        "aisle": ["Lối đi có vật cản","Vạch sơn mờ","Hàng lấn lối","Có chất lỏng rơi vãi","Thiếu biển chỉ dẫn","Lối thoát hiểm chưa thông","Xe đẩy dừng sai vị trí"]
     },
     "KePallet": {
         "align": ["Pallet không ngay hàng","Cạnh pallet lệch mép kệ","Kiện chồng quá cao","Thanh giằng không cân đối"],
         "tidy": ["Pallet hỏng chưa loại bỏ","Mảnh gỗ vụn trên sàn","Tem cũ chưa bóc","Màng PE dư chưa xử lý"]
     }
 }
-
 SIMPLE_REC_BANK = {
     "VanPhong": {
-        "tidy": ["Lau bụi bề mặt","Xếp giấy tờ theo nhóm","Cất dụng cụ vào khay","Lau sạch màn hình","Buộc gọn dây cáp","Bỏ đồ ăn/ly tách đúng chỗ","Dán nhãn khay/ngăn kéo","Dọn rác ngay","Dùng khăn lau khử khuẩn","Sắp xếp bút sổ vào giá"],
+        "tidy": ["Lau bụi bề mặt","Xếp giấy tờ theo nhóm","Cất dụng cụ vào khay","Lau sạch màn hình","Buộc gọn dây cáp","Bỏ đồ ăn/ly tách đúng chỗ","Dán nhãn khay/ngăn kéo","Dọn rác ngay","Khử khuẩn bề mặt","Sắp xếp bút sổ vào giá"],
         "align": ["Đặt đồ ngay ngắn","Cố định vị trí dùng thường xuyên","Căn thẳng theo mép bàn/kệ","Dùng khay chia ô cho phụ kiện"],
         "aisle": ["Dẹp vật cản khỏi lối đi","Bó gọn dây điện sát tường","Không đặt thùng/hộp dưới lối chân","Tận dụng kệ treo cho đồ lặt vặt"]
     },
     "WC": {
         "stain": ["Cọ rửa bằng dung dịch phù hợp","Lau gương, tay nắm","Chà sạch vết ố quanh vòi","Vệ sinh vách ngăn và sàn"],
         "trash": ["Đổ rác ngay","Thay túi rác mới","Dùng thùng có nắp"],
-        "dry": ["Lau khô sàn","Đặt biển cảnh báo khi sàn ướt","Kiểm tra rò rỉ, xử lý ngay"],
+        "dry": ["Lau khô sàn","Đặt biển cảnh báo khi sàn ướt","Kiểm tra rò rỉ & xử lý"],
         "supply": ["Bổ sung giấy/xà phòng","Thêm khăn lau tay","Nạp đầy bình xịt"]
     },
     "HangHoa": {
@@ -571,7 +595,7 @@ SIMPLE_REC_BANK = {
         "bulky": ["Đai cố định chắc chắn","Thêm nẹp góc/đệm bảo vệ","Đặt hướng thuận lợi nâng hạ","Ghi chú kích thước/tải trọng rõ ràng","Chèn chống xê dịch"]
     },
     "LoiDi": {
-        "aisle": ["Dọn sạch vật cản","Sơn lại vạch dẫn hướng","Đặt lại hàng vượt vạch","Lau sạch chất lỏng rơi vãi","Đảm bảo lối thoát hiểm thông suốt","Quy định vị trí dừng cho xe đẩy"]
+        "aisle": ["Dọn sạch vật cản","Sơn lại vạch dẫn hướng","Đặt lại hàng vượt vạch","Lau sạch chất lỏng rơi vãi","Đảm bảo lối thoát hiểm thông suốt","Quy định vị trí dừng xe đẩy"]
     },
     "KePallet": {
         "align": ["Căn thẳng mép pallet","Không chồng quá quy định","Kiểm tra thanh giằng, cân chỉnh"],
@@ -594,7 +618,6 @@ def _pick_from_bank(bank: dict, kv: str, categories: list, limit: int):
     for cat in categories:
         items.extend(kv_bank.get(cat, []))
     random.shuffle(items)
-    # unique
     seen = set(); uniq = []
     for s in items:
         if s not in seen:
@@ -623,36 +646,46 @@ def compose_simple_feedback(kv: str, max_issues: int = 5, max_recs: int = 5) -> 
             lines.append(f" • {s}")
     return "\n".join(lines) if lines else ""
 
-_FEEDBACK_JOBS = {}
-def schedule_simple_feedback(context, chat_id: int, id_kho: str, d: date, kv: str, ten_kho: str):
-    key = (chat_id, str(id_kho), _day_key(d))
-    old = _FEEDBACK_JOBS.pop(key, None)
-    if old:
-        try: old.schedule_removal()
-        except Exception: pass
+SCORING_BUFFER = {}
+def schedule_scoring_aggregate(context, chat_id: int, id_kho: str, d: date, ten_kho: str, kv: str):
+    key = (chat_id, id_kho, d.isoformat())
     job = context.job_queue.run_once(
-        _simple_feedback_job, when=5,
-        data={"chat_id": chat_id, "id_kho": str(id_kho), "day": _day_key(d), "kv": kv, "ten_kho": ten_kho},
-        name=f"fb_{chat_id}_{id_kho}_{_day_key(d)}"
+        _scoring_aggregate_job, when=5,
+        data={"chat_id": chat_id, "id_kho": id_kho, "day": d.isoformat(), "ten_kho": ten_kho, "kv": kv},
+        name=f"score_{chat_id}_{id_kho}_{d.isoformat()}"
     )
-    _FEEDBACK_JOBS[key] = job
+    return job
 
-def _simple_feedback_job(context):
+def _compose_aggregate_message(id_kho: str, ten_kho: str, d: str, items: list, kv: str) -> str:
+    lines = [f"🧮 Điểm 5S cho lô ảnh này", f"- Kho: {id_kho} · Ngày: {datetime.fromisoformat(d).strftime('%d/%m/%Y')}", ""]
+    for idx, it in enumerate(items, 1):
+        lines.append(f"• Ảnh #{idx}: {it['total']}/100 → Loại {it['grade']}")
+    if any(it['total'] < 95 for it in items):
+        fb = compose_simple_feedback(kv)
+        if fb:
+            lines.append("")
+            lines.append(fb)
+    return "\n".join(lines)
+
+def _scoring_aggregate_job(context):
     data = context.job.data or {}
     chat_id = data.get("chat_id")
     id_kho  = data.get("id_kho")
     day     = data.get("day")
-    kv      = data.get("kv") or "HangHoa"
     ten_kho = data.get("ten_kho") or f"Kho {id_kho}"
+    kv      = data.get("kv") or "HangHoa"
+    key = (chat_id, id_kho, day)
+    items = SCORING_BUFFER.get(key, [])
+    if not items:
+        return
+    text = _compose_aggregate_message(id_kho, ten_kho, day, items, kv)
     try:
-        feedback = compose_simple_feedback(kv)
-        if feedback:
-            text = f"🧮 Gợi ý cải thiện 5S — {ten_kho} (ID `{id_kho}`) · Ngày {day}\n\n{feedback}"
-            context.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
-    except Exception as e:
+        context.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
+    except Exception:
         try:
-            context.bot.send_message(chat_id=chat_id, text=f"(log) không gửi được feedback: {e}")
+            context.bot.send_message(chat_id=chat_id, text=text)
         except Exception:
             pass
-# ======= END SIMPLE 5S FEEDBACK =======
+    SCORING_BUFFER[key] = []
+# ========= END 5S SCORING =========
 
