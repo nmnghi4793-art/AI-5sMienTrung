@@ -325,24 +325,54 @@ def _pick_many(pool: list, k: int = 2) -> list:
 def _kv_for_variety(kv_key: str) -> str:
     return kv_key if kv_key in ISSUE_BANK else "VanPhong"
 
-def _diagnose_varied(kv_key: str, parts: dict) -> tuple[list, list]:
+
+def _diagnose_varied(kv_key: str, parts: dict, hint_text: str = "") -> tuple[list, list]:
     """
-    Sinh 'Vấn đề/Khuyến nghị' đa dạng theo KV & hạng mục bị dưới ngưỡng.
+    Sinh 'Vấn đề/Khuyến nghị' đa dạng theo KV & hạng mục dưới ngưỡng.
+    Ưu tiên Hàng Cồng Kềnh (bulky) nếu:
+      - KV là HangHoa và caption/hint có từ khóa bulky, hoặc
+      - chỉ số lối đi (aisle) quá thấp → suy đoán bulky gây cản trở.
     """
     kv = _kv_for_variety(kv_key)
     th = AREA_RULE_THRESHOLDS.get(kv, _AREA_RULE_THRESHOLDS[kv])
 
     # Seed theo thời điểm để câu chữ đổi linh hoạt
-    random.seed(hash(f"{kv}{time.time_ns()}") % (2**32))
+    import time as _t, random as _rnd
+    _rnd.seed(hash(f"{kv}{_t.time_ns()}") % (2**32))
+
+    # Nhận diện bulky
+    hint = (hint_text or "").lower()
+    bulky_flag = False
+    if kv == "HangHoa":
+        if any(kw in hint for kw in BULKY_KEYWORDS):
+            bulky_flag = True
+        else:
+            # nếu lối đi quá hẹp thì ưu tiên coi là case bulky
+            try:
+                aisle_val = float(parts.get("aisle", 1))
+            except Exception:
+                aisle_val = 1.0
+            if aisle_val < 0.60:
+                bulky_flag = True
 
     issues, recs = [], []
+    # 1) Lấy câu theo từng hạng mục dưới ngưỡng
     for metric, val in parts.items():
+        try:
+            v = float(val)
+        except Exception:
+            v = 1.0
         thr = th.get(metric, 0.75)
-        if float(val) < float(thr):  # dưới ngưỡng → nêu vấn đề & gợi ý
+        if v < float(thr):  # dưới ngưỡng → nêu vấn đề & gợi ý
             issues += _pick_many(ISSUE_BANK.get(kv, {}).get(metric, []), k=2)
             recs   += _pick_many(REC_BANK.get(kv, {}).get(metric, []),   k=2)
 
-    # Khử trùng lặp & rút gọn tối đa 5 ý mỗi phần
+    # 2) Bổ sung riêng cho Hàng Cồng Kềnh (nếu áp dụng)
+    if bulky_flag:
+        issues += _pick_many(BULKY_ISSUE, k=2)
+        recs   += _pick_many(BULKY_REC,   k=2)
+
+    # 3) Khử trùng lặp & rút gọn
     def _dedup(xs, limit=5):
         seen, out = set(), []
         for x in xs:
@@ -352,7 +382,7 @@ def _diagnose_varied(kv_key: str, parts: dict) -> tuple[list, list]:
         return out
 
     return _dedup(issues, 5), _dedup(recs, 5)
-# ========== END DIAGNOSTICS VARIETY ==========
+# ==== END BULKY VARIETY ====
 def apply_scoring_struct(photo_bytes: bytes, kv_active: str|None, is_duplicate: bool, dup_key: str, ngay_str: str):
     """
     Trả về cấu trúc cho gộp: {'total','grade','issues','recs','dup','sim','dup_date'}
@@ -396,7 +426,7 @@ def apply_scoring_struct(photo_bytes: bytes, kv_active: str|None, is_duplicate: 
     grade = "A" if total >= 80 else ("B" if total >= 65 else "C")
 
     # 6) Vấn đề / Khuyến nghị
-    issues, recs = _diagnose_varied(kv_key, parts)
+    issues, recs = _diagnose_varied(kv_key, parts, hint_text=kv_active or "")
     if sharp_s < 0.80:
         issues.append("Ảnh hơi mờ/thiếu nét")
         recs.append("Giữ chắc tay hoặc tựa vào bề mặt; chụp gần hơn nếu cần")
@@ -499,7 +529,7 @@ async def _warning_job(context):
     if cur > REQUIRED_PHOTOS:
         await context.bot.send_message(chat_id, f"⚠️ Đã gởi quá số ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
     elif cur < REQUIRED_PHOTOS:
-        await context.bot.send_message(chat_id, f"⚠️ Còn {REQUIRED_PHOTOS - cur} thiếu 1 ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
+        await context.bot.send_message(chat_id, f"⚠️ Còn thiếu {REQUIRED_PHOTOS - cur} ảnh so với quy định ({REQUIRED_PHOTOS} ảnh)")
     # = 4 thì không gửi gì
 
 def schedule_delayed_warning(context, chat_id, id_kho, d):
@@ -999,15 +1029,16 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Trùng lịch sử -> log quá khứ (lấy ngày sớm nhất)
     dups = [item for item in hash_db["items"] if item.get("hash") == h]
-    if dups:
-        prev_dates = sorted(set([it.get("date") for it in dups if it.get("date") != d.isoformat()]))
-        if prev_dates:
-            log_past_use(id_kho=id_kho, prev_date=prev_dates[0], h=h, today=d)
-        await msg.reply_text(
-            "⚠️ Ảnh *trùng* với ảnh đã gửi trước đây. Vui lòng chụp ảnh mới khác để tránh trùng lặp.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
+if dups:
+    prev_dates = sorted(set([it.get("date") for it in dups if it.get("date") != d.isoformat()]))
+    if prev_dates:
+        prev_str = datetime.fromisoformat(prev_dates[0]).strftime("%d/%m/%Y")
+        log_past_use(id_kho=id_kho, prev_date=prev_dates[0], h=h, today=d)
+        warn = f"⚠️ Ảnh *trùng* với ảnh đã gửi ngày {prev_str}. Vui lòng chụp ảnh mới khác để tránh trùng lặp."
+    else:
+        warn = "⚠️ Ảnh *trùng* với ảnh đã gửi trước đây. Vui lòng chụp ảnh mới khác để tránh trùng lặp."
+    await msg.reply_text(warn, parse_mode=ParseMode.MARKDOWN)
+    return
 
     # ===== GHI NHẬN ẢNH HỢP LỆ =====
     # ghi nhận nộp
