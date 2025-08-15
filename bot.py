@@ -992,7 +992,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     if same_day_dups:
         await msg.reply_text(
-            f"⚠️ Kho *{kho_map[id_kho]}* hôm nay đã có 1 ảnh *giống hệt* ảnh này. Vui lòng thay ảnh khác.",
+            f"⚠️ *{kho_map[id_kho]}* hôm nay đã có 1 ảnh *giống hệt* ảnh này. Vui lòng thay ảnh khác.",
             parse_mode=ParseMode.MARKDOWN
         )
         return
