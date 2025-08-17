@@ -172,7 +172,6 @@ def _scoring_key(chat_id: int, id_kho: str, ngay_str: str) -> str:
 # ============ DIAGNOSTICS VARIETY ============
 
 # Kho câu theo từng KV & hạng mục
-}
 
 }
 
