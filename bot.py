@@ -1501,3 +1501,176 @@ except Exception:
     pass
 # ========= END USER SIMPLE PHRASES =========
 
+
+
+
+# ======== OVERRIDE: SIMPLE BANKS (thay toàn bộ bằng bộ câu NGẮN GỌN người dùng cung cấp) ========
+SIMPLE_ISSUE_BANK = {
+    "HangHoa": {
+        "tidy": [
+            "Cần cải thiện vệ sinh khu vực",
+            "Thiếu đồ dùng vệ sinh",
+            "Cần sắp xếp lại không gian",
+            "Có hộp carton chưa được xử lý",
+            "Không rõ ràng về việc sắp xếp hàng hóa",
+            "Cần cải thiện vệ sinh",
+            "Thiếu quy định về bảo quản hàng hóa",
+            "Có nhiều hàng hóa nhưng chưa được sắp xếp gọn gàng",
+            "Sàn nhà có bụi bẩn",
+            "Một số khu vực chưa được chăm sóc thường xuyên",
+            "Cần cải thiện vệ sinh khu vực làm việc",
+            "Hàng hóa chưa được sắp xếp gọn gàng.",
+            "Bụi bẩn trên sàn.",
+            "Không có khu vực phân loại rõ ràng.",
+            "Một số hàng hóa chưa được sắp xếp gọn gàng.",
+            "Có bụi bẩn trên sàn.",
+            "Thiếu nhãn mác cho một số hàng hóa."
+        ],
+        "align": [
+            "Hàng hóa không được sắp xếp gọn gàng",
+            "Một số pallet không có nhãn",
+            "Một số pallet không đồng nhất.",
+            "Một số pallet có hàng hóa chất đống",
+            "Thiếu nhãn mác cho hàng hóa"
+        ],
+        "aisle": [
+            "Khu vực đi lại bị cản trở",
+            "Không có lối đi rõ ràng giữa các khu vực",
+            "Không gian di chuyển hạn chế"
+        ]
+    },
+    "WC": {
+        "stain": [
+            "Bồn cầu bẩn",
+            "Tường có vết bẩn",
+            "Cần cải thiện vệ sinh",
+            "Cần vệ sinh thường xuyên hơn",
+            "Cần kiểm tra vệ sinh thường xuyên",
+            "Thiếu vệ sinh định kỳ"
+        ],
+        "trash": [
+            "Thiếu đồ dùng vệ sinh"
+        ],
+        "dry": [
+            "Cần bảo trì cửa ra vào",
+            "Cần thêm ánh sáng"
+        ]
+    },
+    "VanPhong": {
+        "desk_tidy": [
+            "Bàn làm việc có nhiều thiết bị nhưng chưa sắp xếp gọn gàng",
+            "Bàn làm việc có nhiều thiết bị nhưng chưa được tổ chức tốt",
+            "Cần sắp xếp tài liệu rõ ràng",
+            "Không gian làm việc cần sắp xếp lại",
+            "Cần vệ sinh bề mặt bàn thường xuyên"
+        ],
+        "surface_clean": [
+            "Cần cải thiện vệ sinh khu vực làm việc",
+            "Cần vệ sinh thường xuyên hơn",
+            "Cần kiểm tra vệ sinh thường xuyên"
+        ],
+        "cable": [
+            "Cần sắp xếp dây điện gọn gàng hơn"
+        ]
+    },
+    "LoiDi": {
+        "aisle": [
+            "Khu vực đi lại bị cản trở",
+            "Không có lối đi rõ ràng giữa các khu vực",
+            "Không gian di chuyển hạn chế"
+        ]
+    },
+    "KePallet": {
+        "align": [
+            "Một số pallet không đồng nhất.",
+            "Một số pallet có hàng hóa chất đống",
+            "Không rõ ràng về việc sắp xếp hàng hóa"
+        ],
+        "tidy": [
+            "Có hộp carton chưa được xử lý",
+            "Thiếu nhãn mác cho hàng hóa",
+            "Thiếu nhãn mác cho một số hàng hóa"
+        ]
+    }
+}
+
+SIMPLE_REC_BANK = {
+    "HangHoa": {
+        "tidy": [
+            "Duy trì lịch vệ sinh",
+            "Thực hiện vệ sinh định kỳ",
+            "Duy trì vệ sinh thường xuyên",
+            "Đào tạo nhân viên về 5S",
+            "Tối ưu hóa không gian di chuyển",
+            "Tổ chức lại hàng hóa",
+            "Tạo khu vực phân loại hàng hóa",
+            "Sắp xếp hàng hóa theo khu vực rõ ràng",
+            "Kiểm tra định kỳ tình trạng hàng hóa",
+            "Dọn dẹp bụi bẩn trên sàn",
+            "Thêm biển chỉ dẫn"
+        ],
+        "align": [
+            "Sắp xếp hàng hóa theo loại",
+            "Sắp xếp hàng hóa theo loại và kích thước",
+            "Gắn nhãn cho tất cả pallet",
+            "Đảm bảo pallet được xếp gọn gàng"
+        ],
+        "aisle": [
+            "Tạo lối đi rõ ràng giữa các khu vực",
+            "Dọn dẹp khu vực đi lại",
+            "Tối ưu hóa không gian di chuyển"
+        ]
+    },
+    "WC": {
+        "stain": [
+            "Vệ sinh bồn cầu thường xuyên",
+            "Kiểm tra và sửa chữa các vết bẩn trên tường",
+            "Đặt lịch vệ sinh định kỳ"
+        ],
+        "trash": [
+            "Đảm bảo có đủ dụng cụ cần thiết",
+            "Thêm giấy vệ sinh"
+        ],
+        "dry": [
+            "Bảo trì thiết bị vệ sinh",
+            "Lắp đèn chiếu sáng tốt hơn"
+        ]
+    },
+    "VanPhong": {
+        "desk_tidy": [
+            "Sắp xếp lại không gian để thoáng hơn",
+            "Sắp xếp lại thiết bị trên bàn",
+            "Sử dụng kệ để đồ để giảm bừa bộn trên bàn",
+            "Sắp xếp tài liệu theo thứ tự"
+        ],
+        "surface_clean": [
+            "Dọn dẹp bụi bẩn",
+            "Vệ sinh bề mặt bàn thường xuyên",
+            "Đặt lịch vệ sinh định kỳ cho khu vực làm việc"
+        ],
+        "cable": [
+            "Tổ chức dây điện bằng cách sử dụng băng dính hoặc ống bảo vệ",
+            "Gọn gàng cáp điện"
+        ]
+    },
+    "LoiDi": {
+        "aisle": [
+            "Tạo lối đi rõ ràng giữa các khu vực",
+            "Dọn dẹp khu vực đi lại",
+            "Thêm biển chỉ dẫn"
+        ]
+    },
+    "KePallet": {
+        "align": [
+            "Gắn nhãn cho tất cả pallet",
+            "Đảm bảo pallet được xếp gọn gàng"
+        ],
+        "tidy": [
+            "Xử lý hộp carton",
+            "Duy trì vệ sinh thường xuyên",
+            "Thực hiện kiểm tra định kỳ về vệ sinh"
+        ]
+    }
+}
+# ======== END OVERRIDE BANKS ========
+
