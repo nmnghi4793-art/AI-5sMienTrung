@@ -1168,3 +1168,121 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+# ===== OVERRIDE: use simple global lists for Issues/Recommendations =====
+SIMPLE_BULLET_ISSUES = [
+  "Cần kiểm tra vệ sinh thường xuyên",
+  "Thiếu đồ dùng vệ sinh",
+  "Cần bảo trì cửa ra vào",
+  "Cần thêm ánh sáng",
+  "Bồn cầu bẩn",
+  "Tường có vết bẩn",
+  "Thiếu vệ sinh định kỳ",
+  "Cần sắp xếp lại không gian",
+  "Hàng hóa không được sắp xếp gọn gàng",
+  "Một số pallet không có nhãn",
+  "Khu vực đi lại bị cản trở",
+  "Cần vệ sinh thường xuyên hơn",
+  "Thiếu quy định về bảo quản hàng hóa",
+  "Có nhiều hàng hóa nhưng chưa được sắp xếp gọn gàng",
+  "Sàn nhà có bụi bẩn",
+  "Một số khu vực chưa được chăm sóc thường xuyên",
+  "Bàn làm việc có nhiều thiết bị nhưng chưa sắp xếp gọn gàng",
+  "Có hộp carton chưa được xử lý",
+  "Không rõ ràng về việc sắp xếp hàng hóa",
+  "Cần cải thiện vệ sinh",
+  "Thiếu dấu hiệu phân khu rõ ràng",
+  "Cần cải thiện vệ sinh khu vực làm việc",
+  "Cần sắp xếp dây điện gọn gàng hơn",
+  "Bàn làm việc có nhiều thiết bị nhưng chưa được tổ chức tốt",
+  "Cần vệ sinh bề mặt bàn thường xuyên",
+  "Hàng hóa chưa được sắp xếp gọn gàng.",
+  "Một số pallet không đồng nhất.",
+  "Hàng hóa không được sắp xếp gọn gàng",
+  "Một số pallet có hàng hóa chất đống",
+  "Cần cải thiện vệ sinh khu vực",
+  "Thiếu nhãn mác cho hàng hóa",
+  "Không có lối đi rõ ràng giữa các khu vực",
+  "Bụi bẩn trên sàn.",
+  "Thiếu nhãn mác cho hàng hóa.",
+  "Không có khu vực phân loại rõ ràng.",
+  "Một số hàng hóa chưa được sắp xếp gọn gàng.",
+  "Có bụi bẩn trên sàn.",
+  "Một số pallet không đồng nhất.",
+  "Thiếu nhãn mác cho một số hàng hóa.",
+  "Không gian di chuyển hạn chế."
+]
+SIMPLE_BULLET_RECS   = [
+  "Thêm giấy vệ sinh",
+  "Bảo trì thiết bị vệ sinh",
+  "Lắp đèn chiếu sáng tốt hơn",
+  "Duy trì lịch vệ sinh",
+  "Sắp xếp lại không gian để thoáng hơn",
+  "Sắp xếp hàng hóa theo loại",
+  "Gắn nhãn cho tất cả pallet",
+  "Dọn dẹp khu vực đi lại",
+  "Thực hiện vệ sinh định kỳ",
+  "Đào tạo nhân viên về quy trình bảo quản hàng hóa",
+  "Sắp xếp hàng hóa theo khu vực rõ ràng",
+  "Dọn dẹp bụi bẩn trên sàn",
+  "Thực hiện kiểm tra định kỳ về vệ sinh",
+  "Đảm bảo có quy trình bảo trì cho khu vực",
+  "Tăng cường kỷ luật trong việc giữ gìn vệ sinh",
+  "Sắp xếp lại thiết bị trên bàn",
+  "Xử lý hộp carton",
+  "Duy trì vệ sinh thường xuyên",
+  "Tạo không gian làm việc thoải mái hơn",
+  "Đảm bảo có đủ dụng cụ cần thiết",
+  "Vệ sinh bồn cầu thường xuyên",
+  "Kiểm tra và sửa chữa các vết bẩn trên tường",
+  "Đặt lịch vệ sinh định kỳ",
+  "Sử dụng kệ để đồ để giảm bừa bộn trên bàn",
+  "Tổ chức dây điện bằng cách sử dụng băng dính hoặc ống bảo vệ",
+  "Đặt lịch vệ sinh định kỳ cho khu vực làm việc",
+  "Tổ chức lại hàng hóa",
+  "Thêm biển chỉ dẫn",
+  "Duy trì vệ sinh thường xuyên",
+  "Sắp xếp khu vực làm việc",
+  "Đào tạo nhân viên về 5S",
+  "Sắp xếp hàng hóa theo loại và kích thước.",
+  "Dọn dẹp bụi bẩn trên sàn.",
+  "Thêm nhãn mác cho hàng hóa.",
+  "Tạo khu vực phân loại hàng hóa.",
+  "Đảm bảo pallet được xếp gọn gàng.",
+  "Sắp xếp hàng hóa theo loại và kích thước",
+  "Dọn dẹp vệ sinh thường xuyên",
+  "Thêm nhãn mác cho hàng hóa",
+  "Tạo lối đi rõ ràng giữa các khu vực",
+  "Đào tạo nhân viên về quy tắc 5S",
+  "Sắp xếp hàng hóa theo loại và kích thước.",
+  "Dọn dẹp bụi bẩn thường xuyên.",
+  "Sử dụng nhãn mác rõ ràng cho hàng hóa.",
+  "Tối ưu hóa không gian di chuyển.",
+  "Kiểm tra định kỳ tình trạng hàng hóa."
+]
+
+def _diagnose_varied(kv_key: str, parts: dict) -> tuple[list, list]:
+    """Override: bỏ bank cũ, chỉ dùng bộ câu mới bạn yêu cầu.
+    Nếu điểm dưới 95 sẽ lấy tối đa 5 vấn đề & 5 khuyến nghị ngẫu nhiên (khử trùng lặp).
+    """
+    import random
+    # Nếu mọi hạng mục đều đạt cao nhưng tổng <95, vẫn trả về ít nhất 3 ý mỗi phần.
+    n_issue = 5
+    n_rec = 5
+    issues = SIMPLE_BULLET_ISSUES[:]
+    recs = SIMPLE_BULLET_RECS[:]
+    random.shuffle(issues); random.shuffle(recs)
+    # chọn
+    sel_issues = []
+    sel_recs = []
+    for it in issues:
+        if it not in sel_issues:
+            sel_issues.append(it)
+        if len(sel_issues) >= n_issue: break
+    for it in recs:
+        if it not in sel_recs:
+            sel_recs.append(it)
+        if len(sel_recs) >= n_rec: break
+    return sel_issues, sel_recs
