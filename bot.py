@@ -173,8 +173,6 @@ def _scoring_key(chat_id: int, id_kho: str, ngay_str: str) -> str:
 
 # Kho câu theo từng KV & hạng mục
 
-}
-
 def _pick_many(pool: list, k: int = 2) -> list:
     if not pool: return []
     k = min(k, len(pool))
