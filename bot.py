@@ -1335,3 +1335,74 @@ def _diagnose_varied(kv_key: str, parts: dict) -> tuple[list, list]:
 
 print("[BOOT] simple-bullets-2025-08-17 - override diagnose in use")
 # ========== END SIMPLE BULLET BANKS ==========
+# ================== FORCE NEW SIMPLE BULLETS (FINAL) ==================
+SIMPLE_BANKS_VERSION = "simple-bullets-2025-08-17"
+
+SIMPLE_BULLET_ISSUES = [
+    "Cần kiểm tra vệ sinh thường xuyên","Thiếu đồ dùng vệ sinh","Cần bảo trì cửa ra vào","Cần thêm ánh sáng",
+    "Bồn cầu bẩn","Tường có vết bẩn","Thiếu vệ sinh định kỳ","Cần sắp xếp lại không gian",
+    "Hàng hóa không được sắp xếp gọn gàng","Một số pallet không có nhãn","Khu vực đi lại bị cản trở",
+    "Cần vệ sinh thường xuyên hơn","Thiếu quy định về bảo quản hàng hóa","Có nhiều hàng hóa nhưng chưa được sắp xếp gọn gàng",
+    "Sàn nhà có bụi bẩn","Một số khu vực chưa được chăm sóc thường xuyên","Bàn làm việc có nhiều thiết bị nhưng chưa sắp xếp gọn gàng",
+    "Có hộp carton chưa được xử lý","Không rõ ràng về việc sắp xếp hàng hóa","Cần cải thiện vệ sinh","Thiếu dấu hiệu phân khu rõ ràng",
+    "Cần cải thiện vệ sinh khu vực làm việc","Cần sắp xếp dây điện gọn gàng hơn","Bàn làm việc có nhiều thiết bị nhưng chưa được tổ chức tốt",
+    "Cần vệ sinh bề mặt bàn thường xuyên","Hàng hóa chưa được sắp xếp gọn gàng.","Một số pallet không đồng nhất.",
+    "Hàng hóa không được sắp xếp gọn gàng","Một số pallet có hàng hóa chất đống","Cần cải thiện vệ sinh khu vực",
+    "Thiếu nhãn mác cho hàng hóa","Không có lối đi rõ ràng giữa các khu vực","Bụi bẩn trên sàn.","Thiếu nhãn mác cho hàng hóa.",
+    "Không có khu vực phân loại rõ ràng.","Một số hàng hóa chưa được sắp xếp gọn gàng.","Có bụi bẩn trên sàn.",
+    "Một số pallet không đồng nhất.","Thiếu nhãn mác cho một số hàng hóa.","Không gian di chuyển hạn chế."
+]
+SIMPLE_BULLET_RECS = [
+    "Thêm giấy vệ sinh","Bảo trì thiết bị vệ sinh","Lắp đèn chiếu sáng tốt hơn","Duy trì lịch vệ sinh",
+    "Sắp xếp lại không gian để thoáng hơn","Sắp xếp hàng hóa theo loại","Gắn nhãn cho tất cả pallet","Dọn dẹp khu vực đi lại",
+    "Thực hiện vệ sinh định kỳ","Đào tạo nhân viên về quy trình bảo quản hàng hóa","Sắp xếp hàng hóa theo khu vực rõ ràng",
+    "Dọn dẹp bụi bẩn trên sàn","Thực hiện kiểm tra định kỳ về vệ sinh","Đảm bảo có quy trình bảo trì cho khu vực",
+    "Tăng cường kỷ luật trong việc giữ gìn vệ sinh","Sắp xếp lại thiết bị trên bàn","Xử lý hộp carton","Duy trì vệ sinh thường xuyên",
+    "Tạo không gian làm việc thoải mái hơn","Đảm bảo có đủ dụng cụ cần thiết","Vệ sinh bồn cầu thường xuyên",
+    "Kiểm tra và sửa chữa các vết bẩn trên tường","Đặt lịch vệ sinh định kỳ","Sử dụng kệ để đồ để giảm bừa bộn trên bàn",
+    "Tổ chức dây điện bằng cách sử dụng băng dính hoặc ống bảo vệ","Đặt lịch vệ sinh định kỳ cho khu vực làm việc",
+    "Tổ chức lại hàng hóa","Thêm biển chỉ dẫn","Duy trì vệ sinh thường xuyên","Sắp xếp khu vực làm việc",
+    "Đào tạo nhân viên về 5S","Sắp xếp hàng hóa theo loại và kích thước.","Dọn dẹp bụi bẩn trên sàn.",
+    "Thêm nhãn mác cho hàng hóa.","Tạo khu vực phân loại hàng hóa.","Đảm bảo pallet được xếp gọn gàng.",
+    "Sắp xếp hàng hóa theo loại và kích thước","Dọn dẹp vệ sinh thường xuyên","Thêm nhãn mác cho hàng hóa",
+    "Tạo lối đi rõ ràng giữa các khu vực","Đào tạo nhân viên về quy tắc 5S","Sử dụng nhãn mác rõ ràng cho hàng hóa.",
+    "Tối ưu hóa không gian di chuyển.","Kiểm tra định kỳ tình trạng hàng hóa."
+]
+
+def __simple_pick(pool, k=5):
+    import random
+    pool = [x for x in pool if x]
+    pool = list(dict.fromkeys(pool))  # khử trùng lặp, giữ thứ tự
+    k = min(k, len(pool))
+    if k <= 0: return []
+    random.seed(hash(tuple(pool)) % (2**32))
+    return random.sample(pool, k)
+
+def __simple_diag(kv_key: str, parts: dict) -> tuple[list, list]:
+    """Luôn dùng bộ câu mới; bỏ hoàn toàn bank cũ."""
+    return __simple_pick(SIMPLE_BULLET_ISSUES, 5), __simple_pick(SIMPLE_BULLET_RECS, 5)
+
+def __simple_compose(kv_key: str|None, parts: dict|None=None) -> str:
+    kv_key = kv_key or "HangHoa"
+    issues, recs = __simple_diag(kv_key, parts or {})
+    blocks = []
+    if issues:
+        blocks.append("⚠️ Vấn đề:\n" + "\n".join(f" • {s}" for s in issues))
+    if recs:
+        blocks.append("\n🛠 Khuyến nghị:\n" + "\n".join(f" • {s}" for s in recs))
+    return "\n".join(blocks).strip()
+
+def __force_hooks():
+    # 1) Trỏ tất cả hàm compose/diagnose về bản đơn giản mới
+    for name in ("_diagnose_varied", "compose_feedback", "compose_simple_feedback", "compose_feedback_forced", "_compose_diagnostics"):
+        globals()[name] = ( __simple_diag if "diagnose" in name else __simple_compose )
+    # 2) Nếu luồng gom tin có phần 'Trùng ảnh', ép biến dup_txt = "" khi render
+    if "dup_txt" in globals():
+        try:
+            globals()["dup_txt"] = ""
+        except Exception:
+            pass
+    print("[BOOT]", SIMPLE_BANKS_VERSION, "- force simple bullets hooked")
+
+__force_hooks()
+# ================== END FORCE NEW SIMPLE BULLETS ==================
