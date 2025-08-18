@@ -1367,3 +1367,128 @@ globals()["compose_simple_feedback"] = compose_feedback
 
 print("[BOOT] dynamic-per-image-feedback – enabled")
 # =================== END PER-IMAGE FEEDBACK ===================
+# =================== DYNAMIC FEEDBACK PER IMAGE (FINAL) ===================
+# Yêu cầu: trong flow chấm điểm bạn đã có list `photos` với mỗi item có:
+#   - parts: dict các metric, ví dụ {"align":0.44,"tidy":0.89,"aisle":0.97,"sharp":1.0,"bright":0.9,"size":0.85}
+#   - uid:   id duy nhất mỗi ảnh (file_unique_id hoặc index)
+# Nếu hiện tại bạn chỉ có list parts, có thể tạo uid = f"{idx}-{hash(tuple(sorted(parts.items())))}"
+
+_DEFAULT_THRESHOLDS = {"align":0.90,"tidy":0.92,"aisle":0.95,"sharp":0.65,"bright":0.55,"size":0.70}
+
+def _kv_thresholds(kv: str) -> dict:
+    try:
+        return dict(AREA_RULE_THRESHOLDS.get(kv, _DEFAULT_THRESHOLDS))  # nếu bạn đã có bảng ngưỡng riêng KV
+    except Exception:
+        return dict(_DEFAULT_THRESHOLDS)
+
+def _metric_severity(parts: dict, kv: str) -> list[tuple[str,float]]:
+    th = _kv_thresholds(kv)
+    bad = []
+    for m, v in (parts or {}).items():
+        try:
+            v = float(v)
+        except Exception:
+            continue
+        gap = float(th.get(m, 0.8)) - v
+        if gap > 0:
+            bad.append((m, gap))
+    bad.sort(key=lambda x: x[1], reverse=True)
+    return bad
+
+def _bank(is_issue: bool):
+    return SIMPLE_ISSUE_BANK if is_issue else SIMPLE_REC_BANK
+
+def _pool_for(kv: str, metric: str, is_issue: bool) -> list[str]:
+    bank = _bank(is_issue)
+    out = []
+    out += list(bank.get(kv, {}).get(metric, []))
+    out += list(bank.get("HangHoa", {}).get(metric, []))
+    if metric in ("sharp","bright","size"):
+        out += list(bank.get(kv, {}).get("tidy", [])) + list(bank.get(kv, {}).get("align", [])) + list(bank.get(kv, {}).get("aisle", []))
+        out += list(bank.get("HangHoa", {}).get("tidy", []))
+    out = [x for x in out if x]
+    return list(dict.fromkeys(out))
+
+def _pick_k(pool: list[str], k: int, seed: int) -> list[str]:
+    import random
+    pool = list(dict.fromkeys([x for x in pool if x]))
+    k = max(0, min(k, len(pool)))
+    rnd = random.Random(seed)
+    return rnd.sample(pool, k) if k else []
+
+def _issues_recs_for_one_photo(kv: str, parts: dict, uid_seed: int) -> tuple[list[str], list[str]]:
+    bad = _metric_severity(parts, kv)
+    if not bad:
+        bad = [("tidy", 0.01), ("align", 0.01), ("aisle", 0.01)]
+    issue_pool, rec_pool = [], []
+    for metric, _gap in bad:
+        issue_pool += _pool_for(kv, metric, True)
+        rec_pool   += _pool_for(kv, metric, False)
+    issue_pool = list(dict.fromkeys(issue_pool))
+    rec_pool   = list(dict.fromkeys(rec_pool))
+    return _pick_k(issue_pool, 5, uid_seed ^ 0x51A1), _pick_k(rec_pool, 5, uid_seed ^ 0xC0DE)
+
+def build_feedback_for_batch(kv: str, photo_items: list[dict]) -> tuple[list[str], list[str]]:
+    """
+    photo_items: mỗi phần tử có keys:
+       - 'parts': dict metrics
+       - 'uid':   int hoặc str duy nhất ảnh (file_unique_id, hoặc idx)
+       - 'weight': (tùy chọn) độ ưu tiên → mặc định dựa theo tổng severity
+    Trả về (issues5, recs5) đa dạng toàn lô (không lặp, ưu tiên ảnh nặng).
+    """
+    scored = []
+    for idx, it in enumerate(photo_items):
+        parts = it.get("parts") or {}
+        sev   = sum(g for _, g in _metric_severity(parts, kv))  # tổng gap
+        uid   = str(it.get("uid", idx))
+        uid_seed = hash(uid) % (2**32)
+        iss, rcs = _issues_recs_for_one_photo(kv, parts, uid_seed)
+        scored.append({"sev": sev, "iss": iss, "rcs": rcs, "uid_seed": uid_seed})
+
+    # 1) Ưu tiên ảnh nặng trước
+    scored.sort(key=lambda x: x["sev"], reverse=True)
+
+    # 2) Gom đa dạng: đi vòng qua từng ảnh, lấy lần lượt từng câu chưa dùng
+    used_i, used_r = set(), set()
+    out_i, out_r = [], []
+
+    # Lấy tối đa 5 câu mỗi loại
+    while (len(out_i) < 5 or len(out_r) < 5) and any(s["iss"] or s["rcs"] for s in scored):
+        for s in scored:
+            # issues
+            if len(out_i) < 5:
+                for cand in s["iss"]:
+                    if cand not in used_i:
+                        used_i.add(cand); out_i.append(cand); s["iss"].remove(cand); break
+            # recs
+            if len(out_r) < 5:
+                for cand in s["rcs"]:
+                    if cand not in used_r:
+                        used_r.add(cand); out_r.append(cand); s["rcs"].remove(cand); break
+        # nếu vòng không lấy thêm được gì → thoát
+        if (len(out_i) >= 5 and len(out_r) >= 5) or all((not s["iss"] and not s["rcs"]) for s in scored):
+            break
+
+    # 3) Fallback nếu vẫn thiếu (lấy thêm từ pool còn lại theo seed tổng)
+    if len(out_i) < 5:
+        pool_rest = [c for s in scored for c in s["iss"] if c not in used_i]
+        out_i += _pick_k(pool_rest, 5 - len(out_i), seed=hash(kv+str(len(photo_items)))%(2**32))
+    if len(out_r) < 5:
+        pool_rest = [c for s in scored for c in s["rcs"] if c not in used_r]
+        out_r += _pick_k(pool_rest, 5 - len(out_r), seed=hash("R"+kv+str(len(photo_items)))%(2**32))
+
+    return out_i[:5], out_r[:5]
+
+def compose_feedback_for_batch(kv: str, photo_items: list[dict]) -> str:
+    issues, recs = build_feedback_for_batch(kv, photo_items)
+    blocks = []
+    if issues:
+        blocks.append("⚠️ Vấn đề:\n" + "\n".join(f" • {s}" for s in issues))
+    if recs:
+        blocks.append("\n🛠️ Khuyến nghị:\n" + "\n".join(f" • {s}" for s in recs))
+    return "\n".join(blocks).strip()
+
+# === Hook nhẹ để luồng gộp tin dùng hàm mới này nếu bạn gọi ở chỗ build message ===
+globals()["compose_feedback_for_batch"] = compose_feedback_for_batch
+print("[BOOT] dynamic-per-image-batch-feedback – enabled")
+# =================== END DYNAMIC FEEDBACK PER IMAGE ===================
