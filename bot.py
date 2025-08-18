@@ -1235,3 +1235,135 @@ def main():
 
 if __name__ == "__main__":
     main()
+# =================== PER-IMAGE FEEDBACK (dynamic & non-repeating) ===================
+# Mục tiêu: mỗi ảnh sinh 5 vấn đề/5 khuyến nghị dựa trên metric ảnh (parts)
+# → không còn tình trạng mọi ảnh/kho đều ra 5 câu giống nhau.
+
+# Fallback ngưỡng nếu không có bảng ngưỡng theo KV
+_DEFAULT_THRESHOLDS = {
+    "align": 0.90,   # thẳng hàng/pallet song song
+    "tidy":  0.92,   # gọn gàng/vệ sinh chung
+    "aisle": 0.95,   # lối đi thông thoáng
+    "sharp": 0.65,   # độ nét
+    "bright": 0.55,  # độ sáng
+    "size":  0.70,   # kích thước/độ chi tiết ảnh
+}
+
+def _get_thresholds_for_kv(kv: str) -> dict:
+    # Nếu dự án bạn đã có AREA_RULE_THRESHOLDS thì dùng, không thì fallback
+    try:
+        return dict(AREA_RULE_THRESHOLDS.get(kv, _DEFAULT_THRESHOLDS))  # type: ignore
+    except Exception:
+        return dict(_DEFAULT_THRESHOLDS)
+
+def _metric_priority(parts: dict, kv: str) -> list[tuple[str, float]]:
+    """
+    Trả về danh sách metric bị dưới ngưỡng, sắp theo "mức độ thiếu" lớn → nhỏ.
+    parts: ví dụ {"align":0.44,"tidy":0.89,"aisle":0.97,"sharp":1.0,"bright":1.0,"size":0.85}
+    """
+    th = _get_thresholds_for_kv(kv)
+    bad = []
+    for m, v in (parts or {}).items():
+        try:
+            v = float(v)
+        except Exception:
+            continue
+        thr = float(th.get(m, 0.80))
+        gap = thr - v
+        if gap > 0:  # dưới chuẩn
+            bad.append((m, gap))
+    # sắp xếp theo gap giảm dần → ưu tiên chọn câu bám sát metric thiếu nhiều
+    bad.sort(key=lambda x: x[1], reverse=True)
+    return bad
+
+def _pool_for_metric(kv: str, metric: str, is_issue: bool) -> list[str]:
+    """
+    Lấy ngân hàng câu theo KV và metric. Nếu thiếu thì fallback về 'HangHoa' hoặc gộp tổng.
+    Yêu cầu có SIMPLE_ISSUE_BANK / SIMPLE_REC_BANK trong file (đã thêm trước đó).
+    """
+    bank = SIMPLE_ISSUE_BANK if is_issue else SIMPLE_REC_BANK
+    out = []
+    # Ưu tiên KV cụ thể
+    out += list(bank.get(kv, {}).get(metric, []))
+    # Fallback KV chung
+    out += list(bank.get("HangHoa", {}).get(metric, []))
+    # Thêm “tổng hợp” khi metric là chất lượng ảnh
+    if metric in ("sharp", "bright", "size"):
+        # Ghép vài câu vệ sinh/tidy/nhãn/lối đi để đa dạng
+        out += list(bank.get(kv, {}).get("tidy", []))
+        out += list(bank.get(kv, {}).get("align", []))
+        out += list(bank.get(kv, {}).get("aisle", []))
+        out += list(bank.get("HangHoa", {}).get("tidy", []))
+    # Loại rỗng + khử trùng lặp, giữ thứ tự
+    out = [x for x in out if x]
+    out = list(dict.fromkeys(out))
+    return out
+
+def _pick_diverse(candidates: list[str], k: int, seed_val: int) -> list[str]:
+    """
+    Chọn ngẫu nhiên k phần tử, nhưng seed theo ảnh để mỗi ảnh khác nhau, cùng ảnh thì ổn định.
+    seed_val: có thể là hash(file_id/phash) → nếu không có, vẫn dùng parts để tạo seed.
+    """
+    import random
+    pool = [x for x in candidates if x]
+    pool = list(dict.fromkeys(pool))
+    k = max(0, min(k, len(pool)))
+    rnd = random.Random(seed_val)
+    return rnd.sample(pool, k) if k > 0 else []
+
+def _diagnose_varied(kv_key: str, parts: dict) -> tuple[list[str], list[str]]:
+    """
+    OVERRIDE: Chọn câu bám theo metric ảnh.
+    - Ưu tiên metric thiếu nhiều → gom ứng viên theo metric đó.
+    - Mỗi ảnh seed theo 'parts' để tạo ngẫu nhiên ổn định/đa dạng giữa các ảnh.
+    """
+    kv = kv_key or "HangHoa"
+    bad_metrics = _metric_priority(parts or {}, kv)
+    # Nếu không có metric nào dưới ngưỡng, vẫn dùng tidy/align/aisle làm ứng viên
+    if not bad_metrics:
+        bad_metrics = [("tidy", 0.01), ("align", 0.01), ("aisle", 0.01)]
+
+    # Tạo seed theo parts để mỗi ảnh khác nhau
+    seed_val = hash(tuple(sorted((k, round(float(v), 3)) for k, v in (parts or {}).items()))) % (2**32)
+
+    issue_pool, rec_pool = [], []
+    # Duyệt theo thứ tự ưu tiên (gap lớn trước), ghép ứng viên theo từng metric
+    for metric, _gap in bad_metrics:
+        issue_pool += _pool_for_metric(kv, metric, is_issue=True)
+        rec_pool   += _pool_for_metric(kv, metric, is_issue=False)
+
+    # Nếu vẫn ít quá, bổ sung tidy/align/aisle để đa dạng
+    if len(issue_pool) < 5:
+        issue_pool += _pool_for_metric(kv, "tidy", True) + _pool_for_metric(kv, "align", True) + _pool_for_metric(kv, "aisle", True)
+    if len(rec_pool) < 5:
+        rec_pool += _pool_for_metric(kv, "tidy", False) + _pool_for_metric(kv, "align", False) + _pool_for_metric(kv, "aisle", False)
+
+    # Khử trùng lặp lần nữa
+    issue_pool = list(dict.fromkeys([x for x in issue_pool if x]))
+    rec_pool   = list(dict.fromkeys([x for x in rec_pool if x]))
+
+    issues = _pick_diverse(issue_pool, k=5, seed_val=seed_val ^ 0xA51E)
+    recs   = _pick_diverse(rec_pool,   k=5, seed_val=seed_val ^ 0x5EED)
+    return issues, recs
+
+def compose_feedback(kv: str|None, parts: dict|None=None) -> str:
+    """
+    Hàm compose chính: dùng _diagnose_varied mới (theo ảnh) → trả 5 vấn đề + 5 khuyến nghị.
+    """
+    kv = kv or "HangHoa"
+    parts = parts or {}
+    issues, recs = _diagnose_varied(kv, parts)
+    blocks = []
+    if issues:
+        blocks.append("⚠️ Vấn đề:\n" + "\n".join(f" • {s}" for s in issues))
+    if recs:
+        blocks.append("\n🛠️ Khuyến nghị:\n" + "\n".join(f" • {s}" for s in recs))
+    return "\n".join(blocks).strip()
+
+# Giữ tương thích tên hàm cũ
+compose_simple_feedback = compose_feedback
+globals()["compose_feedback"] = compose_feedback
+globals()["compose_simple_feedback"] = compose_feedback
+
+print("[BOOT] dynamic-per-image-feedback – enabled")
+# =================== END PER-IMAGE FEEDBACK ===================
