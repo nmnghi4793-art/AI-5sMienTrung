@@ -1125,3 +1125,22 @@ def main():
 
 if __name__ == "__main__":
     main()
+# ===== add near build_app() =====
+async def _post_init(app):
+    # Xóa webhook cũ và bỏ các update tồn đọng để tránh conflict
+    await app.bot.delete_webhook(drop_pending_updates=True)
+
+def build_app():
+    token = _get_bot_token()
+    app = (
+        ApplicationBuilder()
+        .token(token)
+        .post_init(_post_init)   # <— thêm dòng này
+        .build()
+    )
+    # ... add handlers như cũ
+    return app
+
+if __name__ == "__main__":
+    app = build_app()
+    app.run_polling(drop_pending_updates=True)  # <— giữ tham số này
