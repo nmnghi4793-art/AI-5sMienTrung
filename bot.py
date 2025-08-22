@@ -1002,12 +1002,14 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if dups:
         prev_dates = sorted(set([it.get("date") for it in dups if it.get("date") != d.isoformat()]))
         if prev_dates:
-            log_past_use(id_kho=id_kho, prev_date=prev_dates[0], h=h, today=d)
-        await msg.reply_text(
-            "⚠️ Ảnh *trùng* với ảnh đã gửi trước đây. Vui lòng chụp ảnh mới khác để tránh trùng lặp.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
+    dup_date = prev_dates[0]  # ngày ảnh trùng
+    log_past_use(id_kho=id_kho, prev_date=dup_date, h=h, today=d)
+    warn = f"⚠️ Ảnh *trùng* với ảnh đã gửi trước đây vào ngày {dup_date}. Vui lòng chụp ảnh mới khác để tránh trùng lặp."
+    await msg.reply_text(
+        warn,
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return
 
     # ===== GHI NHẬN ẢNH HỢP LỆ =====
     # ghi nhận nộp
