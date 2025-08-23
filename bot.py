@@ -1003,11 +1003,17 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prev_dates = sorted(set([it.get("date") for it in dups if it.get("date") != d.isoformat()]))
         if prev_dates:
             log_past_use(id_kho=id_kho, prev_date=prev_dates[0], h=h, today=d)
-        await msg.reply_text(
-            "⚠️ Ảnh *trùng* với ảnh đã gửi trước đây. Vui lòng chụp ảnh mới khác để tránh trùng lặp.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
+            try:
+                dup_date_txt = datetime.fromisoformat(prev_dates[0]).strftime("%d/%m/%Y")
+            except Exception:
+                dup_date_txt = prev_dates[0]
+
+            warn = f"⚠️ Ảnh *trùng* với ảnh đã gửi trước đây ngày {dup_date_txt}. Vui lòng chụp ảnh mới khác để tránh trùng lặp."
+            await msg.reply_text(
+                warn,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
 
     # ===== GHI NHẬN ẢNH HỢP LỆ =====
     # ghi nhận nộp
