@@ -250,7 +250,7 @@ SIMPLE_REC_BANK = {
     "HangHoa": {
         "align": [
             "Căn thẳng theo mép kệ hoặc vạch; xoay cùng một hướng",
-            "Dùng nêm/chặn mép để giữ thẳng hàng",
+            "Dùng nệm chặn mép để giữ thẳng hàng",
             "Rà soát pallet lệch, điều chỉnh lại ngay"
         ],
         "tidy": [
