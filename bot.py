@@ -36,7 +36,7 @@ import cv2
 import numpy as np
 import random, time
 
-SCORING_ENABLED = os.getenv("SCORING_ENABLED","1") == "1"
+SCORING_ENABLED = os.getenv("SCORING_ENABLED","0") == "1"
 SCORING_MODE = os.getenv("SCORING_MODE","rule").strip().lower() or "rule"
 # Default weights per area
 _DEFAULT_WEIGHTS = {
@@ -172,7 +172,7 @@ def _scoring_key(chat_id: int, id_kho: str, ngay_str: str) -> str:
 # ============ DIAGNOSTICS VARIETY ============
 
 # Kho câu theo từng KV & hạng mục
-ISSUE_BANK = {
+SIMPLE_ISSUE_BANK = {
     "HangHoa": {
         "align": [
             "Hàng chưa thẳng hàng, lệch so với mép kệ",
@@ -246,7 +246,7 @@ ISSUE_BANK = {
     }
 }
 
-REC_BANK = {
+SIMPLE_REC_BANK = {
     "HangHoa": {
         "align": [
             "Căn thẳng theo mép kệ hoặc vạch; xoay cùng một hướng",
@@ -323,7 +323,7 @@ def _pick_many(pool: list, k: int = 2) -> list:
     return random.sample(pool, k)
 
 def _kv_for_variety(kv_key: str) -> str:
-    return kv_key if kv_key in ISSUE_BANK else "VanPhong"
+    return kv_key if kv_key in SIMPLE_ISSUE_BANK else 'HangHoa'
 
 def _diagnose_varied(kv_key: str, parts: dict) -> tuple[list, list]:
     """
@@ -339,8 +339,8 @@ def _diagnose_varied(kv_key: str, parts: dict) -> tuple[list, list]:
     for metric, val in parts.items():
         thr = th.get(metric, 0.75)
         if float(val) < float(thr):  # dưới ngưỡng → nêu vấn đề & gợi ý
-            issues += _pick_many(ISSUE_BANK.get(kv, {}).get(metric, []), k=2)
-            recs   += _pick_many(REC_BANK.get(kv, {}).get(metric, []),   k=2)
+            issues += _pick_many(SIMPLE_ISSUE_BANK.get(kv, {}).get(metric, []), k=2)
+            recs   += _pick_many(SIMPLE_REC_BANK.get(kv, {}).get(metric, []),   k=2)
 
     # Khử trùng lặp & rút gọn tối đa 5 ý mỗi phần
     def _dedup(xs, limit=5):
@@ -442,7 +442,7 @@ def _compose_aggregate_message(items: list, id_kho: str, ngay_str: str) -> str:
                 dup_txt = "❌"
         else:
             dup_txt = "✅"
-        lines.append(f"• Ảnh #{idx}: *{it['total']}/100* → Loại *{it['grade']}* · Trùng ảnh: {dup_txt}")
+        lines.append(f"• Ảnh #{idx}: *{it['total']}/100* → Loại *{it['grade']}*")
         agg_issues.extend(it.get('issues', [])); agg_recs.extend(it.get('recs', []))
     def _uniq_first(xs, limit=5):
         seen, out = set(), []
@@ -992,7 +992,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     if same_day_dups:
         await msg.reply_text(
-            f"⚠️ Kho *{kho_map[id_kho]}* hôm nay đã có 1 ảnh *giống hệt* ảnh này. Vui lòng thay ảnh khác.",
+            f"⚠️ *{kho_map[id_kho]}* hôm nay đã có 1 ảnh *giống hệt* ảnh này. Vui lòng thay ảnh khác.",
             parse_mode=ParseMode.MARKDOWN
         )
         return
@@ -1000,24 +1000,67 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Trùng lịch sử -> log quá khứ (lấy ngày sớm nhất)
     dups = [item for item in hash_db["items"] if item.get("hash") == h]
     if dups:
-        prev_dates = sorted(
-            set([it.get("date") for it in dups if it.get("date") != d.isoformat()])
-        )
+        prev_dates = sorted(set([it.get("date") for it in dups if it.get("date") != d.isoformat()]))
         if prev_dates:
-            # lưu “ảnh quá khứ” cho báo cáo ngày
             log_past_use(id_kho=id_kho, prev_date=prev_dates[0], h=h, today=d)
-            # hiển thị ngày bị trùng: dd/mm/%Y
-            dup_date_txt = datetime.fromisoformat(prev_dates[0]).strftime("%d/%m/%Y")
-        else:
-            dup_date_txt = None
-    
-        warn = (
-            f"⚠️ Ảnh *trùng* với ảnh đã gửi trước đây"
-            + (f" vào ngày *{dup_date_txt}*" if dup_date_txt else "")
-            + ". Vui lòng chụp ảnh mới khác để tránh trùng lặp."
+        await msg.reply_text(
+            "⚠️ Ảnh *trùng* với ảnh đã gửi trước đây. Vui lòng chụp ảnh mới khác để tránh trùng lặp.",
+            parse_mode=ParseMode.MARKDOWN
         )
-        await msg.reply_text(warn, parse_mode=ParseMode.MARKDOWN)
-        return sorted(all_ids - submitted)
+        return
+
+    # ===== GHI NHẬN ẢNH HỢP LỆ =====
+    # ghi nhận nộp
+    submit_db = load_submit_db()
+    mark_submitted(submit_db, id_kho, d)
+    save_submit_db(submit_db)
+
+    # lưu hash
+    info = {
+        "ts": datetime.now(TZ).isoformat(timespec="seconds"),
+        "chat_id": msg.chat_id,
+        "user_id": msg.from_user.id,
+        "id_kho": id_kho,
+        "date": d.isoformat(),
+    }
+    hash_db["items"].append({"hash": h, **info})
+    save_hash_db(hash_db)
+
+    # đếm số ảnh và **GỘP** phản hồi theo kho/ngày
+    count_db = load_count_db()
+    cur = inc_count(count_db, id_kho, d, step=1)
+    save_count_db(count_db)
+
+    
+    # ===== CHẤM ĐIỂM 5S (rule-based, không ML) =====
+    if SCORING_ENABLED and SCORING_MODE == "rule":
+        # Lấy KV từ caption/text nếu có
+        kv_text = None
+        m_kv = AREA_RX.search(caption_from_group or "")
+        if m_kv:
+            kv_text = m_kv.group(1)
+        reply_text = apply_scoring_rule(b, kv_text or "", is_duplicate=False)
+        dupkey = _dup_key(msg.chat_id, str(id_kho))
+        ngay_text = d.strftime('%d/%m/%Y')
+        item = apply_scoring_struct(b, kv_text or "", False, dupkey, ngay_text)
+        key = _scoring_key(msg.chat_id, str(id_kho), ngay_text)
+        SCORING_BUFFER[key].append(item)
+
+    await ack_photo_progress(context, msg.chat_id, id_kho, kho_map[id_kho], d, cur)
+    # Đặt cảnh báo trễ 6s sau mỗi lần ghi nhận (job sẽ tự kiểm tra và chỉ gửi nếu <4 hoặc >4)
+    schedule_delayed_warning(context, msg.chat_id, id_kho, d)
+
+    # Gửi đánh giá 5S thành 1 tin nhắn, trễ 5 giây sau khi báo ghi nhận
+    if SCORING_ENABLED and SCORING_MODE == "rule":
+        try:
+            schedule_scoring_aggregate(context, chat_id=msg.chat_id, id_kho=str(id_kho), ngay_str=d.strftime('%d/%m/%Y'), delay_seconds=5)
+        except Exception:
+            pass
+# ========= BÁO CÁO 21:00 =========
+def get_missing_ids_for_day(kho_map, submit_db, d: date):
+    submitted = set(submit_db.get(d.isoformat(), []))
+    all_ids = set(kho_map.keys())
+    return sorted(all_ids - submitted)
 
 async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
     # danh sách chat nhận báo cáo
@@ -1107,7 +1150,6 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("chatid", chatid))
     app.add_handler(CommandHandler("report_now", report_now))
-    app.add_handler(CommandHandler("version", lambda u,c: u.message.reply_text(f"✅ Using {SIMPLE_BANKS_VERSION}")))
     app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, photo_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
@@ -1125,22 +1167,510 @@ def main():
 
 if __name__ == "__main__":
     main()
-# ===== add near build_app() =====
-async def _post_init(app):
-    # Xóa webhook cũ và bỏ các update tồn đọng để tránh conflict
-    await app.bot.delete_webhook(drop_pending_updates=True)
 
-def build_app():
-    token = _get_bot_token()
-    app = (
-        ApplicationBuilder()
-        .token(token)
-        .post_init(_post_init)   # <— thêm dòng này
-        .build()
-    )
-    # ... add handlers như cũ
-    return app
 
-if __name__ == "__main__":
-    app = build_app()
-    app.run_polling(drop_pending_updates=True)  # <— giữ tham số này
+# ======= SIMPLE BANKS (ngắn gọn, dễ hiểu, 10–20 ý mỗi nhóm) =======
+SIMPLE_SIMPLE_ISSUE_BANK = {
+    "VanPhong": {
+        "tidy": [
+            "Bàn có nhiều bụi","Giấy tờ để lộn xộn","Dụng cụ chưa gọn","Màn hình chưa sạch","Dây cáp rối",
+            "Ly tách, thức ăn để trên bàn","Khăn giấy bừa bộn","Ngăn kéo lộn xộn","Bề mặt dính bẩn","Bàn phím/bàn di bẩn",
+            "Ghế không ngay vị trí","Thùng rác đầy","Nhiều vật nhỏ rơi vãi","Kệ tài liệu chưa phân khu","Bảng ghi chú rối mắt"
+        ],
+        "align": [
+            "Vật dụng đặt chưa ngay ngắn","Đồ đạc lệch vị trí","Tài liệu chưa xếp thẳng mép",
+            "Màn hình/đế đỡ lệch","Bút, sổ không theo hàng"
+        ],
+        "aisle": [
+            "Lối đi bị vướng đồ","Có vật cản dưới chân bàn","Dây điện vắt ngang lối đi",
+            "Thùng carton chắn lối","Túi đồ để dưới chân ghế"
+        ]
+    },
+    "WC": {
+        "stain": [
+            "Bồn/bề mặt còn vết bẩn","Gương, tay nắm chưa sạch","Vết ố quanh vòi","Vệt nước trên gương",
+            "Vách ngăn bám bẩn","Sàn bám cặn"
+        ],
+        "trash": [
+            "Thùng rác đầy","Rác chưa gom","Túi rác không thay","Rác rơi ra ngoài"
+        ],
+        "dry": [
+            "Sàn còn ướt","Có vệt nước đọng","Khăn giấy rơi xuống sàn","Chưa đặt biển cảnh báo khi sàn ướt"
+        ],
+        "supply": [
+            "Thiếu giấy/ xà phòng","Không có khăn lau tay","Bình xịt trống","Chưa bổ sung vật tư"
+        ]
+    },
+    "HangHoa": {
+        "align": [
+            "Hàng chưa thẳng hàng","Pallet xoay khác hướng","Có khoảng hở trong dãy xếp","Thùng nhô ra mép kệ",
+            "Kiện cao thấp không đều","Hàng lệch line vạch","Thùng xẹp/biến dạng","Xếp chồng mất cân bằng"
+        ],
+        "tidy": [
+            "Khu vực còn bừa bộn","Thùng rỗng chưa gom","Vật tạm đặt sai chỗ","Màng PE rách vương vãi",
+            "Dụng cụ chưa trả về vị trí","Bao bì rách nhưng chưa xử lý","Nhãn mác bong tróc","Có hàng đặt trực tiếp xuống sàn"
+        ],
+        "aisle": [
+            "Lối đi bị lấn","Đồ cản trở đường đi","Pallet để dưới line","Hàng đẩy qua vạch an toàn",
+            "Khu vực thao tác chật hẹp"
+        ],
+        "bulky": [
+            "Hàng cồng kềnh chưa cố định","Dây đai lỏng","Điểm tựa không chắc","Đặt sai hướng nâng hạ",
+            "Thiếu nẹp góc/đệm bảo vệ","Chưa dán nhãn cảnh báo kích thước/tải trọng"
+        ]
+    },
+    "LoiDi": {
+        "aisle": [
+            "Lối đi có vật cản","Vạch sơn mờ","Hàng lấn sang lối đi","Có chất lỏng rơi vãi",
+            "Thiếu biển chỉ dẫn","Lối thoát hiểm chưa thông thoáng","Xe đẩy dừng sai vị trí"
+        ]
+    },
+    "KePallet": {
+        "align": [
+            "Pallet không ngay hàng","Cạnh pallet lệch mép kệ","Kiện chồng quá cao","Thanh giằng không cân đối"
+        ],
+        "tidy": [
+            "Pallet hỏng chưa loại bỏ","Mảnh gỗ vụn trên sàn","Tem cũ chưa bóc","Màng PE dư chưa xử lý"
+        ]
+    }
+}
+
+SIMPLE_SIMPLE_REC_BANK = {
+    "VanPhong": {
+        "tidy": [
+            "Lau bụi bề mặt","Xếp giấy tờ theo nhóm","Cất dụng cụ vào khay","Lau sạch màn hình","Buộc gọn dây cáp",
+            "Bỏ thức ăn/ly tách đúng chỗ","Dán nhãn khay/ngăn kéo","Dọn rác ngay","Dùng khăn lau khử khuẩn",
+            "Sắp xếp bút, sổ vào ống/kệ"
+        ],
+        "align": [
+            "Đặt đồ ngay ngắn","Cố định vị trí dùng thường xuyên","Căn thẳng theo mép bàn/kệ",
+            "Dùng khay chia ô cho phụ kiện"
+        ],
+        "aisle": [
+            "Dẹp vật cản khỏi lối đi","Bó gọn dây điện sát tường","Không đặt thùng/hộp dưới lối chân",
+            "Tận dụng kệ treo cho đồ lặt vặt"
+        ]
+    },
+    "WC": {
+        "stain": [
+            "Cọ rửa bằng dung dịch phù hợp","Lau gương, tay nắm","Chà sạch vết ố quanh vòi",
+            "Vệ sinh vách ngăn và sàn"
+        ],
+        "trash": [
+            "Đổ rác ngay","Thay túi rác mới","Đặt thùng có nắp"
+        ],
+        "dry": [
+            "Lau khô sàn","Đặt biển cảnh báo khi sàn ướt","Kiểm tra rò rỉ, xử lý ngay"
+        ],
+        "supply": [
+            "Bổ sung giấy/ xà phòng","Thêm khăn lau tay","Nạp đầy bình xịt"
+        ]
+    },
+    "HangHoa": {
+        "align": [
+            "Căn theo mép kệ/vạch","Xoay cùng một hướng","Bổ sung nẹp góc giữ thẳng","San phẳng chiều cao chênh lệch"
+        ],
+        "tidy": [
+            "Gom thùng rỗng về khu tập kết","Dọn vật tạm đặt sai chỗ","Quấn lại màng PE gọn gàng",
+            "In/dán lại nhãn mác rõ ràng","Đặt hàng trên pallet, không đặt sàn"
+        ],
+        "aisle": [
+            "Giữ lối đi thông thoáng","Di dời vật cản khỏi line","Chừa khoảng an toàn ≥ 1m"
+        ],
+        "bulky": [
+            "Đai cố định chắc chắn","Thêm nẹp góc/đệm bảo vệ","Đặt hướng thuận lợi nâng hạ",
+            "Ghi chú kích thước/tải trọng rõ ràng","Bổ sung điểm chèn chống xê dịch"
+        ]
+    },
+    "LoiDi": {
+        "aisle": [
+            "Dọn sạch vật cản","Sơn lại vạch dẫn hướng","Đặt lại hàng vượt vạch","Lau sạch chất lỏng rơi vãi",
+            "Đảm bảo lối thoát hiểm thông suốt","Quy định vị trí dừng cho xe đẩy"
+        ]
+    },
+    "KePallet": {
+        "align": [
+            "Căn thẳng mép pallet","Không chồng quá quy định","Kiểm tra thanh giằng, cân chỉnh"
+        ],
+        "tidy": [
+            "Loại bỏ pallet hỏng","Quét dọn mảnh gỗ vụn","Cắt bỏ màng PE thừa","Bóc tem cũ trước khi dán tem mới"
+        ]
+    }
+}
+# ======= END SIMPLE BANKS =======
+
+
+
+# ========= USER SIMPLE PHRASES (ngắn gọn – đa dạng, ưu tiên HangHoa) =========
+def _prepend_unique(dst: dict, kv: str, cat: str, items: list):
+    kvd = dst.setdefault(kv, {})
+    arr = kvd.setdefault(cat, [])
+    for s in reversed(items):
+        if s not in arr:
+            arr.insert(0, s)
+
+def _apply_user_simple_overlay_all():
+    # ===== HANG HOA (ưu tiên hàng cồng kềnh) =====
+    _prepend_unique(SIMPLE_ISSUE_BANK, "HangHoa", "tidy", [
+        "Hàng hóa không được sắp xếp gọn gàng",
+        "Cần cải thiện vệ sinh khu vực",
+        "Thiếu nhãn mác cho hàng hóa",
+        "Thùng rỗng chưa gom",
+        "Màng PE thừa/chưa cắt gọn",
+        "Bao bì rách chưa xử lý",
+        "Dụng cụ tạm đặt sai vị trí",
+        "Khu vực chất hàng bừa bộn",
+        "Có hàng đặt trực tiếp xuống sàn",
+        "Tem cũ chưa bóc trước khi dán tem mới"
+    ])
+    _prepend_unique(SIMPLE_ISSUE_BANK, "HangHoa", "align", [
+        "Một số pallet có hàng hóa chất đống",
+        "Hàng không thẳng hàng theo mép kệ",
+        "Pallet xoay khác hướng còn lại",
+        "Có khoảng hở giữa các kiện",
+        "Kiện chồng cao, dễ mất cân bằng",
+        "Thùng nhô ra mép pallet",
+        "Xếp chồng chưa đồng đều chiều cao",
+        "Nẹp góc thiếu hoặc lỏng",
+        "Thùng méo/xẹp ảnh hưởng xếp chồng",
+        "Hàng đặt lệch line đánh dấu"
+    ])
+    _prepend_unique(SIMPLE_ISSUE_BANK, "HangHoa", "aisle", [
+        "Không có lối đi rõ ràng giữa các khu vực",
+        "Lối đi bị lấn bởi hàng hóa",
+        "Vạch an toàn mờ/khó thấy",
+        "Có vật cản trong đường đi xe nâng",
+        "Chất lỏng rơi vãi trên sàn",
+        "Hàng vượt qua vạch giới hạn"
+    ])
+    _prepend_unique(SIMPLE_ISSUE_BANK, "HangHoa", "bulky", [
+        "Hàng cồng kềnh chưa cố định",
+        "Dây đai lỏng hoặc thiếu",
+        "Thiếu nẹp góc cho kiện lớn",
+        "Đặt sai hướng nâng hạ",
+        "Thiếu cảnh báo kích thước/tải trọng",
+        "Điểm tựa/đệm kê không chắc chắn"
+    ])
+
+    _prepend_unique(SIMPLE_REC_BANK, "HangHoa", "tidy", [
+        "Sắp xếp hàng hóa theo loại và kích thước",
+        "Dọn dẹp khu vực để đảm bảo sạch sẽ",
+        "Thêm nhãn mác cho hàng hóa",
+        "Thực hiện kiểm tra định kỳ về 5S",
+        "Gom thùng rỗng về khu tập kết",
+        "Cắt gọn màng PE thừa",
+        "Dán lại nhãn rõ ràng, dễ đọc",
+        "Loại bỏ bao bì rách, thay mới",
+        "Thu hồi dụng cụ về đúng vị trí",
+        "Không đặt hàng trực tiếp xuống sàn"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "HangHoa", "align", [
+        "Căn thẳng theo mép kệ/vạch chỉ dẫn",
+        "Xoay cùng một hướng cho toàn bộ kiện",
+        "San phẳng chiều cao giữa các lớp",
+        "Bổ sung nẹp góc để giữ thẳng",
+        "Đặt sát mép trong của pallet",
+        "Kiểm tra cân bằng trước khi rời vị trí"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "HangHoa", "aisle", [
+        "Tạo lối đi rõ ràng giữa các pallet",
+        "Giữ lối đi thông thoáng ≥ 1m",
+        "Sơn/khôi phục lại vạch an toàn",
+        "Di dời vật cản khỏi đường xe nâng",
+        "Lau khô sàn, xử lý ngay chất đổ",
+        "Không vượt qua vạch giới hạn"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "HangHoa", "bulky", [
+        "Đai cố định chắc chắn các kiện lớn",
+        "Thêm nẹp góc/đệm bảo vệ cho cạnh bén",
+        "Sắp xếp theo hướng thuận lợi nâng hạ",
+        "Ghi rõ kích thước/tải trọng trên nhãn",
+        "Chèn thêm điểm tựa chống xê dịch"
+    ])
+
+    # ===== KE PALLET =====
+    _prepend_unique(SIMPLE_ISSUE_BANK, "KePallet", "align", [
+        "Pallet lệch mép kệ",
+        "Kiện chồng quá cao mức cho phép",
+        "Thanh giằng không cân đối",
+        "Khoảng cách an toàn đỉnh kệ không đủ"
+    ])
+    _prepend_unique(SIMPLE_ISSUE_BANK, "KePallet", "tidy", [
+        "Pallet hỏng chưa loại bỏ",
+        "Mảnh gỗ vụn còn trên sàn",
+        "Tem cũ còn sót lại",
+        "Màng PE dư chưa cắt"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "KePallet", "align", [
+        "Căn thẳng mép pallet theo tiêu chuẩn",
+        "Không chồng quá quy định chiều cao",
+        "Kiểm tra thanh giằng và cân chỉnh lại",
+        "Đảm bảo khoảng cách an toàn phần đầu kệ"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "KePallet", "tidy", [
+        "Loại bỏ pallet hỏng ngay",
+        "Quét dọn sạch mảnh gỗ vụn",
+        "Bóc tem cũ trước khi dán mới",
+        "Cắt gọn màng PE thừa"
+    ])
+
+    # ===== LOI DI =====
+    _prepend_unique(SIMPLE_ISSUE_BANK, "LoiDi", "aisle", [
+        "Lối đi có vật cản",
+        "Vạch dẫn hướng mờ/đứt đoạn",
+        "Hàng lấn sang lối đi",
+        "Có chất lỏng rơi vãi",
+        "Thiếu biển hướng dẫn",
+        "Lối thoát hiểm chưa thông thoáng"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "LoiDi", "aisle", [
+        "Dọn sạch vật cản ngay",
+        "Sơn lại vạch dẫn hướng",
+        "Sắp xếp lại hàng vượt vạch",
+        "Lau sạch và xử lý chất đổ",
+        "Bổ sung biển hướng dẫn rõ ràng",
+        "Đảm bảo lối thoát hiểm thông suốt"
+    ])
+
+    # ===== VAN PHONG =====
+    _prepend_unique(SIMPLE_ISSUE_BANK, "VanPhong", "tidy", [
+        "Bàn có bụi và giấy tờ lộn xộn",
+        "Dụng cụ tản mát, chưa có khay",
+        "Màn hình/bàn phím bám bẩn",
+        "Dây cáp rối dưới chân bàn",
+        "Thùng rác đầy chưa đổ",
+        "Nhiều vật nhỏ rơi vãi"
+    ])
+    _prepend_unique(SIMPLE_ISSUE_BANK, "VanPhong", "align", [
+        "Vật dụng đặt chưa ngay ngắn",
+        "Tài liệu chưa xếp thẳng mép",
+        "Màn hình/đế đỡ lệch"
+    ])
+    _prepend_unique(SIMPLE_ISSUE_BANK, "VanPhong", "aisle", [
+        "Lối đi bị vướng đồ",
+        "Túi đồ để dưới chân ghế"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "VanPhong", "tidy", [
+        "Lau bụi bề mặt, khử khuẩn",
+        "Xếp giấy tờ theo nhóm/chủ đề",
+        "Dùng khay/hộp chia ô cho dụng cụ",
+        "Buộc gọn dây cáp sát chân bàn",
+        "Đổ rác ngay khi đầy"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "VanPhong", "align", [
+        "Sắp xếp đồ ngay ngắn, cố định vị trí",
+        "Căn thẳng theo mép bàn/kệ"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "VanPhong", "aisle", [
+        "Dẹp đồ khỏi lối đi",
+        "Không đặt túi đồ dưới lối chân"
+    ])
+
+    # ===== WC =====
+    _prepend_unique(SIMPLE_ISSUE_BANK, "WC", "stain", [
+        "Bề mặt/thiết bị còn vết bẩn",
+        "Gương và tay nắm chưa sạch",
+        "Vết ố quanh vòi rửa"
+    ])
+    _prepend_unique(SIMPLE_ISSUE_BANK, "WC", "trash", [
+        "Thùng rác đầy",
+        "Rác chưa gom gọn",
+        "Túi rác không thay"
+    ])
+    _prepend_unique(SIMPLE_ISSUE_BANK, "WC", "dry", [
+        "Sàn còn ướt",
+        "Có vệt nước đọng"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "WC", "stain", [
+        "Cọ rửa bằng dung dịch phù hợp",
+        "Lau sạch gương, tay nắm",
+        "Chà sạch vết ố quanh vòi"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "WC", "trash", [
+        "Đổ rác ngay khi đầy",
+        "Thay túi rác mới, dùng thùng có nắp"
+    ])
+    _prepend_unique(SIMPLE_REC_BANK, "WC", "dry", [
+        "Lau khô sàn",
+        "Đặt biển cảnh báo khi sàn ướt"
+    ])
+
+try:
+    _apply_user_simple_overlay_all()
+except Exception:
+    pass
+# ========= END USER SIMPLE PHRASES =========
+
+
+
+
+# ======== OVERRIDE: SIMPLE BANKS (thay toàn bộ bằng bộ câu NGẮN GỌN người dùng cung cấp) ========
+SIMPLE_ISSUE_BANK = {
+    "HangHoa": {
+        "tidy": [
+            "Cần cải thiện vệ sinh khu vực",
+            "Thiếu đồ dùng vệ sinh",
+            "Cần sắp xếp lại không gian",
+            "Có hộp carton chưa được xử lý",
+            "Không rõ ràng về việc sắp xếp hàng hóa",
+            "Cần cải thiện vệ sinh",
+            "Thiếu quy định về bảo quản hàng hóa",
+            "Có nhiều hàng hóa nhưng chưa được sắp xếp gọn gàng",
+            "Sàn nhà có bụi bẩn",
+            "Một số khu vực chưa được chăm sóc thường xuyên",
+            "Cần cải thiện vệ sinh khu vực làm việc",
+            "Hàng hóa chưa được sắp xếp gọn gàng.",
+            "Bụi bẩn trên sàn.",
+            "Không có khu vực phân loại rõ ràng.",
+            "Một số hàng hóa chưa được sắp xếp gọn gàng.",
+            "Có bụi bẩn trên sàn.",
+            "Thiếu nhãn mác cho một số hàng hóa."
+        ],
+        "align": [
+            "Hàng hóa không được sắp xếp gọn gàng",
+            "Một số pallet không có nhãn",
+            "Một số pallet không đồng nhất.",
+            "Một số pallet có hàng hóa chất đống",
+            "Thiếu nhãn mác cho hàng hóa"
+        ],
+        "aisle": [
+            "Khu vực đi lại bị cản trở",
+            "Không có lối đi rõ ràng giữa các khu vực",
+            "Không gian di chuyển hạn chế"
+        ]
+    },
+    "WC": {
+        "stain": [
+            "Bồn cầu bẩn",
+            "Tường có vết bẩn",
+            "Cần cải thiện vệ sinh",
+            "Cần vệ sinh thường xuyên hơn",
+            "Cần kiểm tra vệ sinh thường xuyên",
+            "Thiếu vệ sinh định kỳ"
+        ],
+        "trash": [
+            "Thiếu đồ dùng vệ sinh"
+        ],
+        "dry": [
+            "Cần bảo trì cửa ra vào",
+            "Cần thêm ánh sáng"
+        ]
+    },
+    "VanPhong": {
+        "desk_tidy": [
+            "Bàn làm việc có nhiều thiết bị nhưng chưa sắp xếp gọn gàng",
+            "Bàn làm việc có nhiều thiết bị nhưng chưa được tổ chức tốt",
+            "Cần sắp xếp tài liệu rõ ràng",
+            "Không gian làm việc cần sắp xếp lại",
+            "Cần vệ sinh bề mặt bàn thường xuyên"
+        ],
+        "surface_clean": [
+            "Cần cải thiện vệ sinh khu vực làm việc",
+            "Cần vệ sinh thường xuyên hơn",
+            "Cần kiểm tra vệ sinh thường xuyên"
+        ],
+        "cable": [
+            "Cần sắp xếp dây điện gọn gàng hơn"
+        ]
+    },
+    "LoiDi": {
+        "aisle": [
+            "Khu vực đi lại bị cản trở",
+            "Không có lối đi rõ ràng giữa các khu vực",
+            "Không gian di chuyển hạn chế"
+        ]
+    },
+    "KePallet": {
+        "align": [
+            "Một số pallet không đồng nhất.",
+            "Một số pallet có hàng hóa chất đống",
+            "Không rõ ràng về việc sắp xếp hàng hóa"
+        ],
+        "tidy": [
+            "Có hộp carton chưa được xử lý",
+            "Thiếu nhãn mác cho hàng hóa",
+            "Thiếu nhãn mác cho một số hàng hóa"
+        ]
+    }
+}
+
+SIMPLE_REC_BANK = {
+    "HangHoa": {
+        "tidy": [
+            "Duy trì lịch vệ sinh",
+            "Thực hiện vệ sinh định kỳ",
+            "Duy trì vệ sinh thường xuyên",
+            "Đào tạo nhân viên về 5S",
+            "Tối ưu hóa không gian di chuyển",
+            "Tổ chức lại hàng hóa",
+            "Tạo khu vực phân loại hàng hóa",
+            "Sắp xếp hàng hóa theo khu vực rõ ràng",
+            "Kiểm tra định kỳ tình trạng hàng hóa",
+            "Dọn dẹp bụi bẩn trên sàn",
+            "Thêm biển chỉ dẫn"
+        ],
+        "align": [
+            "Sắp xếp hàng hóa theo loại",
+            "Sắp xếp hàng hóa theo loại và kích thước",
+            "Gắn nhãn cho tất cả pallet",
+            "Đảm bảo pallet được xếp gọn gàng"
+        ],
+        "aisle": [
+            "Tạo lối đi rõ ràng giữa các khu vực",
+            "Dọn dẹp khu vực đi lại",
+            "Tối ưu hóa không gian di chuyển"
+        ]
+    },
+    "WC": {
+        "stain": [
+            "Vệ sinh bồn cầu thường xuyên",
+            "Kiểm tra và sửa chữa các vết bẩn trên tường",
+            "Đặt lịch vệ sinh định kỳ"
+        ],
+        "trash": [
+            "Đảm bảo có đủ dụng cụ cần thiết",
+            "Thêm giấy vệ sinh"
+        ],
+        "dry": [
+            "Bảo trì thiết bị vệ sinh",
+            "Lắp đèn chiếu sáng tốt hơn"
+        ]
+    },
+    "VanPhong": {
+        "desk_tidy": [
+            "Sắp xếp lại không gian để thoáng hơn",
+            "Sắp xếp lại thiết bị trên bàn",
+            "Sử dụng kệ để đồ để giảm bừa bộn trên bàn",
+            "Sắp xếp tài liệu theo thứ tự"
+        ],
+        "surface_clean": [
+            "Dọn dẹp bụi bẩn",
+            "Vệ sinh bề mặt bàn thường xuyên",
+            "Đặt lịch vệ sinh định kỳ cho khu vực làm việc"
+        ],
+        "cable": [
+            "Tổ chức dây điện bằng cách sử dụng băng dính hoặc ống bảo vệ",
+            "Gọn gàng cáp điện"
+        ]
+    },
+    "LoiDi": {
+        "aisle": [
+            "Tạo lối đi rõ ràng giữa các khu vực",
+            "Dọn dẹp khu vực đi lại",
+            "Thêm biển chỉ dẫn"
+        ]
+    },
+    "KePallet": {
+        "align": [
+            "Gắn nhãn cho tất cả pallet",
+            "Đảm bảo pallet được xếp gọn gàng"
+        ],
+        "tidy": [
+            "Xử lý hộp carton",
+            "Duy trì vệ sinh thường xuyên",
+            "Thực hiện kiểm tra định kỳ về vệ sinh"
+        ]
+    }
+}
+# ======== END OVERRIDE BANKS ========
+
