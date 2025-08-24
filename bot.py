@@ -65,6 +65,18 @@ async def safe_edit_message_text(bot, chat_id, message_id, text, **kwargs):
     return await _retry_async(bot.edit_message_text, chat_id=chat_id, message_id=message_id, text=text, **kwargs)
 # === End helpers ===
 
+# === Helper: hiển thị tên kho + mã kho an toàn (không lỗi nếu kho_map chưa có) ===
+def get_kho_display(id_kho):
+    try:
+        name = kho_map.get(id_kho)
+    except Exception:
+        name = None
+    if name and str(name) != str(id_kho):
+        return f"{name} (`{id_kho}`)"
+    else:
+        return f"`{id_kho}`"
+# === End helper kho display ===
+
 # ===== Scoring imports & ENV =====
 import cv2
 import numpy as np
@@ -464,7 +476,7 @@ def apply_scoring_struct(photo_bytes: bytes, kv_active: str|None, is_duplicate: 
 
 
 def _compose_aggregate_message(items: list, id_kho: str, ngay_str: str) -> str:
-    header = f"📋 Điểm 5S cho lô ảnh này\n- Kho: {kho_map.get(id_kho, id_kho)} (`{id_kho}`) · Ngày: `{ngay_str}`\n"
+    header = f"📋 Điểm 5S cho lô ảnh này\n- Kho: {get_kho_display(id_kho)} · Ngày: `{ngay_str}`\n"
     lines = []
     agg_issues, agg_recs = [], []
     for idx, it in enumerate(items, 1):
