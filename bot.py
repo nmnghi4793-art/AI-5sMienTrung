@@ -31,6 +31,40 @@ from telegram.ext import (
     ContextTypes, filters
 )
 
+
+
+# === Safe Telegram send helpers (retry khi mạng chậm) ===
+import asyncio
+from telegram.error import TimedOut, RetryAfter, NetworkError
+
+async def _retry_async(coro_func, *args, **kwargs):
+    """
+    Retry tối đa 1 lần:
+    - RetryAfter: ngủ số giây Telegram yêu cầu rồi thử lại.
+    - TimedOut/NetworkError: ngủ 1s rồi thử lại.
+    """
+    try:
+        return await coro_func(*args, **kwargs)
+    except RetryAfter as e:
+        await asyncio.sleep(getattr(e, "retry_after", 2))
+        return await coro_func(*args, **kwargs)
+    except (TimedOut, NetworkError):
+        await asyncio.sleep(1)
+        return await coro_func(*args, **kwargs)
+
+async def safe_send_message(bot, chat_id, text, **kwargs):
+    return await _retry_async(bot.send_message, chat_id=chat_id, text=text, **kwargs)
+
+async def safe_send_photo(bot, chat_id, photo, **kwargs):
+    return await _retry_async(bot.send_photo, chat_id=chat_id, photo=photo, **kwargs)
+
+async def safe_send_document(bot, chat_id, document, **kwargs):
+    return await _retry_async(bot.send_document, chat_id=chat_id, document=document, **kwargs)
+
+async def safe_edit_message_text(bot, chat_id, message_id, text, **kwargs):
+    return await _retry_async(bot.edit_message_text, chat_id=chat_id, message_id=message_id, text=text, **kwargs)
+# === End helpers ===
+
 # ===== Scoring imports & ENV =====
 import cv2
 import numpy as np
@@ -112,7 +146,7 @@ async def _send_scoring_job(context: ContextTypes.DEFAULT_TYPE):
     text = data.get("text")
     if chat_id and text:
         try:
-            await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
+            await safe_send_message(context.bot, chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
         except Exception:
             pass
 
@@ -465,7 +499,7 @@ async def _send_scoring_aggregate(context: ContextTypes.DEFAULT_TYPE):
     if not items: return
     text = _compose_aggregate_message(items, id_kho, ngay_str)
     try:
-        await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
+        await safe_send_message(context.bot, chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
     except Exception:
         pass
 
@@ -497,9 +531,9 @@ async def _warning_job(context):
         cur = 0
 
     if cur > REQUIRED_PHOTOS:
-        await context.bot.send_message(chat_id, f"⚠️ Đã gởi quá số ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
+        await safe_send_message(context.bot, chat_id, f"⚠️ Đã gởi quá số ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
     elif cur < REQUIRED_PHOTOS:
-        await context.bot.send_message(chat_id, f"⚠️ Còn {REQUIRED_PHOTOS - cur} thiếu 1 ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
+        await safe_send_message(context.bot, chat_id, f"⚠️ Còn {REQUIRED_PHOTOS - cur} thiếu 1 ảnh so với quy định ( {REQUIRED_PHOTOS} ảnh )")
     # = 4 thì không gửi gì
 
 def schedule_delayed_warning(context, chat_id, id_kho, d):
@@ -868,14 +902,14 @@ async def ack_photo_progress(context: ContextTypes.DEFAULT_TYPE, chat_id: int, i
     text = "\n".join(state['lines'])
 
     if state['msg_id'] is None:
-        m = await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+        m = await safe_send_message(context.bot, chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
         state['msg_id'] = m.message_id
     else:
         try:
-            await context.bot.edit_message_text(chat_id=chat_id, message_id=state['msg_id'],
+            await safe_edit_message_text(context.bot, chat_id=chat_id, message_id=state['msg_id'],
                                                 text=text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
         except Exception:
-            m = await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+            m = await safe_send_message(context.bot, chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
             state['msg_id'] = m.message_id
 
 # ========= HANDLERS =========
@@ -1139,7 +1173,7 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
 
     for cid in chat_ids:
         try:
-            await context.bot.send_message(cid, text, parse_mode=ParseMode.MARKDOWN)
+            await safe_send_message(context.bot, cid, text, parse_mode=ParseMode.MARKDOWN)
         except Exception:
             pass
 
@@ -1149,7 +1183,14 @@ def build_app() -> Application:
     if not token:
         raise RuntimeError("Thiếu biến môi trường BOT_TOKEN")
 
-    app = ApplicationBuilder().token(token).build()
+    app = (ApplicationBuilder()
+    .token(token)
+    .connect_timeout(30)
+    .read_timeout(45)
+    .write_timeout(45)
+    .pool_timeout(10)
+    .get_updates_read_timeout(60)
+    .build())
     app.bot_data["kho_map"] = load_kho_map()
 
     app.add_handler(CommandHandler("start", cmd_start))
