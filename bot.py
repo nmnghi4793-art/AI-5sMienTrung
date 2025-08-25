@@ -1174,7 +1174,7 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
     else:
         parts.append("*3) Tất cả kho đã gửi đủ số lượng ảnh theo quy định*")
 
-    text = f"📢 *BÁO CÁO 5S - {today.strftime(%d/%m/%Y)}*\n\n" + "\n\n".join(parts)
+    text = f"📢 *BÁO CÁO 5S - {today.strftime('%d/%m/%Y')}*\n\n" + "\n\n".join(parts)
 
     for cid in chat_ids:
         try:
