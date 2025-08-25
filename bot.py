@@ -24,6 +24,17 @@ from datetime import datetime, date, time as dtime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+
+# === Markdown V2 escape helper ===
+SPECIALS = r"_*[]()~`>#+-=|{}.!"
+def escape_md_v2(s: str) -> str:
+    if s is None:
+        return ""
+    s = str(s)
+    for ch in SPECIALS:
+        s = s.replace(ch, "\\" + ch)
+    return s
+# === End escape helper ===
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -476,7 +487,7 @@ def apply_scoring_struct(photo_bytes: bytes, kv_active: str|None, is_duplicate: 
 
 
 def _compose_aggregate_message(items: list, id_kho: str, ngay_str: str) -> str:
-    header = f"📋 Điểm 5S cho lô ảnh này\n- Kho: {get_kho_display(id_kho)} · Ngày: `{ngay_str}`\n"
+    header = f"*📋 Điểm 5S cho lô ảnh này*\n- Kho: {get_kho_display(id_kho)} · Ngày: `{ngay_str}`\n"
     lines = []
     agg_issues, agg_recs = [], []
     for idx, it in enumerate(items, 1):
@@ -500,8 +511,8 @@ def _compose_aggregate_message(items: list, id_kho: str, ngay_str: str) -> str:
     issues_u = _uniq_first(agg_issues, 5); recs_u = _uniq_first(agg_recs, 5)
     msg = header + "\n" + "\n".join(lines)
     if issues_u or recs_u:
-        msg += "\n\n⚠️ *Vấn đề:*" + "".join([f"\n • {x}" for x in issues_u])
-        msg += "\n\n🛠️ *Khuyến nghị:*" + "".join([f"\n • {x}" for x in recs_u])
+        msg += "\n\n⚠️ *Vấn đề:*" + "".join([f"\n • {escape_md_v2(x)}" for x in issues_u])
+        msg += "\n\n🛠️ *Khuyến nghị:*" + "".join([f"\n • {escape_md_v2(x)}" for x in recs_u])
     return msg
 
 async def _send_scoring_aggregate(context: ContextTypes.DEFAULT_TYPE):
@@ -1174,11 +1185,12 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
     else:
         parts.append("*3) Tất cả kho đã gửi đủ số lượng ảnh theo quy định*")
 
-    text = f"📢 *BÁO CÁO 5S - {today.strftime('%d/%m/%Y')}*\n\n" + "\n\n".join(parts)
+    text = f"*📢 BÁO CÁO 5S - {today.strftime('%d/%m/%Y')}*\n\n" + "\n\n".join(parts)
+
 
     for cid in chat_ids:
         try:
-            await safe_send_message(context.bot, cid, text)
+            await safe_send_message(context.bot, cid, text, parse_mode=ParseMode.MARKDOWN_V2)
         except Exception:
             pass
 
