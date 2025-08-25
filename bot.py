@@ -1138,7 +1138,7 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
     for kid, dates in sorted(past_by_kho.items()):
         rep = min(dates)
         rep_str = datetime.fromisoformat(rep).strftime("%d/%m/%Y")
-        past_lines.append(f"- `{kid}`: trùng ảnh ngày {rep_str}")
+        past_lines.append(f"- {kid}: trùng ảnh ngày {rep_str}")
 
     # 3) CHỈ liệt kê CHƯA ĐỦ số ảnh
     not_enough_list = []
@@ -1154,7 +1154,7 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
         lines = ["*1) Các kho chưa báo cáo 5S:*"]
         for mid in missing_ids:
             name = kho_map.get(mid, "(không rõ)")
-            lines.append(f"- `{mid}` - {name}")
+            lines.append(f"- {mid} - {name}")
         parts.append("\n".join(lines))
     else:
         parts.append("*1) Các kho chưa báo cáo 5S:* Không có")
@@ -1169,12 +1169,12 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
     if not_enough_list:
         sec3 = ["*3) Các kho chưa gửi đủ số lượng ảnh:*"]
         for kid, c in sorted(not_enough_list):
-            sec3.append(f"- `{kid}`: {c}/{REQUIRED_PHOTOS}")
+            sec3.append(f"- {kid}: {c}/{REQUIRED_PHOTOS}")
         parts.append("\n".join(sec3))
     else:
         parts.append("*3) Tất cả kho đã gửi đủ số lượng ảnh theo quy định*")
 
-    text = f"📢 *BÁO CÁO 5S - {today.strftime('%d/%m/%Y')}*\n\n" + "\n\n".join(parts)
+    text = f"📢 *BÁO CÁO 5S - {today.strftime(%d/%m/%Y)}*\n\n" + "\n\n".join(parts)
 
     for cid in chat_ids:
         try:
