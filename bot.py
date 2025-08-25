@@ -476,7 +476,7 @@ def apply_scoring_struct(photo_bytes: bytes, kv_active: str|None, is_duplicate: 
 
 
 def _compose_aggregate_message(items: list, id_kho: str, ngay_str: str) -> str:
-    header = f"📋 Điểm 5S cho lô ảnh này\n- Kho: {get_kho_display(id_kho)} · Ngày: `{ngay_str}`\n"
+    header = f"📋 Điểm 5S cho lô ảnh này\n- Kho: {get_kho_display(id_kho)} · Ngày: {ngay_str}\n"
     lines = []
     agg_issues, agg_recs = [], []
     for idx, it in enumerate(items, 1):
