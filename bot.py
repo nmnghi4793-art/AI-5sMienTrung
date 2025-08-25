@@ -169,7 +169,7 @@ async def _send_scoring_job(context: ContextTypes.DEFAULT_TYPE):
     text = data.get("text")
     if chat_id and text:
         try:
-            await safe_send_message(context.bot, chat_id=chat_id, text=text)
+            await safe_send_message(context.bot, chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN_V2)
         except Exception:
             pass
 
@@ -522,7 +522,7 @@ async def _send_scoring_aggregate(context: ContextTypes.DEFAULT_TYPE):
     if not items: return
     text = _compose_aggregate_message(items, id_kho, ngay_str)
     try:
-        await safe_send_message(context.bot, chat_id=chat_id, text=text)
+        await safe_send_message(context.bot, chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN_V2)
     except Exception:
         pass
 
