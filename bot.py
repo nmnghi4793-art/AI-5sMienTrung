@@ -158,7 +158,7 @@ async def _send_scoring_job(context: ContextTypes.DEFAULT_TYPE):
     text = data.get("text")
     if chat_id and text:
         try:
-            await safe_send_message(context.bot, chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
+            await safe_send_message(context.bot, chat_id=chat_id, text=text)
         except Exception:
             pass
 
@@ -511,7 +511,7 @@ async def _send_scoring_aggregate(context: ContextTypes.DEFAULT_TYPE):
     if not items: return
     text = _compose_aggregate_message(items, id_kho, ngay_str)
     try:
-        await safe_send_message(context.bot, chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
+        await safe_send_message(context.bot, chat_id=chat_id, text=text)
     except Exception:
         pass
 
@@ -914,14 +914,14 @@ async def ack_photo_progress(context: ContextTypes.DEFAULT_TYPE, chat_id: int, i
     text = "\n".join(state['lines'])
 
     if state['msg_id'] is None:
-        m = await safe_send_message(context.bot, chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+        m = await safe_send_message(context.bot, chat_id=chat_id, text=text, disable_web_page_preview=True)
         state['msg_id'] = m.message_id
     else:
         try:
             await safe_edit_message_text(context.bot, chat_id=chat_id, message_id=state['msg_id'],
-                                                text=text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+                                                text=text, disable_web_page_preview=True)
         except Exception:
-            m = await safe_send_message(context.bot, chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+            m = await safe_send_message(context.bot, chat_id=chat_id, text=text, disable_web_page_preview=True)
             state['msg_id'] = m.message_id
 
 # ========= HANDLERS =========
@@ -935,20 +935,20 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "➡️ Mẹo: Gửi 1 tin nhắn text có ID/Ngày rồi gửi nhiều ảnh liên tiếp (không caption) — bot sẽ áp cùng caption 2 phút.\n\n"
         "Lệnh: `/chatid` lấy chat id, `/report_now` gửi báo cáo ngay."
     )
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    await update.effective_message.reply_text(msg)
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_start(update, context)
 
 async def chatid(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(str(update.effective_chat.id))
+    await update.effective_message.reply_text(str(update.effective_chat.id))
 
 async def report_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_daily_report(context)
-    await update.message.reply_text("✅ Đã gửi báo cáo 5S mới nhất vào các group cấu hình.")
+    await update.effective_message.reply_text("✅ Đã gửi báo cáo 5S mới nhất vào các group cấu hình.")
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (update.message.text or "").strip()
+    text = (update.effective_message.text or "").strip()
     if text:
         upsert_last_text(update.effective_chat.id, text)
 
@@ -959,24 +959,22 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return  # không làm phiền
 
     if id_kho not in kho_map:
-        await update.message.reply_text(
-            f"❌ ID `{id_kho}` *không có* trong danh sách. Kiểm tra lại!",
-            parse_mode=ParseMode.MARKDOWN
+        await update.effective_message.reply_text(
+            f"❌ ID `{id_kho}` *không có* trong danh sách. Kiểm tra lại!"
         )
         return
 
     cur = get_count(load_count_db(), id_kho, d)
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         f"✅ Đã nhận ID `{id_kho}` ({kho_map[id_kho]}). Hôm nay hiện có *{cur} / {REQUIRED_PHOTOS}* ảnh. "
-        "Gửi ảnh ngay sau đó (không cần caption).",
-        parse_mode=ParseMode.MARKDOWN
+        "Gửi ảnh ngay sau đó (không cần caption)."
     )
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
+    msg = update.effective_message
 
     # ---- ALBUM / MEDIA GROUP ----
-    caption = (msg.caption or "").strip()
+    caption = (msg.caption.strip() if (msg and getattr(msg, 'caption', None)) else '')
     caption_from_group = caption
     mgid = msg.media_group_id
     if mgid:
@@ -997,15 +995,13 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not id_kho:
         await msg.reply_text(
-            "⚠️ *Thiếu ID kho.* Thêm ID vào caption hoặc gửi 1 text có ID trước rồi gửi ảnh (trong 2 phút).",
-            parse_mode=ParseMode.MARKDOWN
+            "⚠️ *Thiếu ID kho.* Thêm ID vào caption hoặc gửi 1 text có ID trước rồi gửi ảnh (trong 2 phút)."
         )
         return
 
     if id_kho not in kho_map:
         await msg.reply_text(
-            f"❌ ID `{id_kho}` *không có* trong danh sách Excel. Kiểm tra lại!",
-            parse_mode=ParseMode.MARKDOWN
+            f"❌ ID `{id_kho}` *không có* trong danh sách Excel. Kiểm tra lại!"
         )
         return
 
@@ -1022,8 +1018,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         seen = mg_hashes.setdefault(mgid, set())
         if h in seen:
             await msg.reply_text(
-                "⚠️ Có ít nhất 2 ảnh *giống nhau* trong cùng lô gửi. Vui lòng chọn ảnh khác.",
-                parse_mode=ParseMode.MARKDOWN
+                "⚠️ Có ít nhất 2 ảnh *giống nhau* trong cùng lô gửi. Vui lòng chọn ảnh khác."
             )
             return
         seen.add(h)
@@ -1038,8 +1033,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     if same_day_dups:
         await msg.reply_text(
-            f"⚠️ *{kho_map[id_kho]}* hôm nay đã có 1 ảnh *giống hệt* ảnh này. Vui lòng thay ảnh khác.",
-            parse_mode=ParseMode.MARKDOWN
+            f"⚠️ *{kho_map[id_kho]}* hôm nay đã có 1 ảnh *giống hệt* ảnh này. Vui lòng thay ảnh khác."
         )
         return
 
@@ -1056,8 +1050,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             warn = f"⚠️ Ảnh *trùng* với ảnh đã gửi trước đây ngày {dup_date_txt}. Vui lòng chụp ảnh mới khác để tránh trùng lặp."
             await msg.reply_text(
-                warn,
-                parse_mode=ParseMode.MARKDOWN
+                warn
             )
             return
 
@@ -1185,7 +1178,7 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
 
     for cid in chat_ids:
         try:
-            await safe_send_message(context.bot, cid, text, parse_mode=ParseMode.MARKDOWN)
+            await safe_send_message(context.bot, cid, text)
         except Exception:
             pass
 
