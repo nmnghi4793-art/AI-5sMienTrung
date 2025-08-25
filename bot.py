@@ -1107,7 +1107,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     schedule_delayed_warning(context, msg.chat_id, id_kho, d)
 
     # Gửi đánh giá 5S thành 1 tin nhắn, trễ 5 giây sau khi báo ghi nhận
-    if SCORING_ENABLED and SCORING_MODE == "rule":
+    if SCORING_ENABLED and SCORING_MODE == 'rule' and cur >= REQUIRED_PHOTOS:
         try:
             schedule_scoring_aggregate(context, chat_id=msg.chat_id, id_kho=str(id_kho), ngay_str=d.strftime('%d/%m/%Y'), delay_seconds=5)
         except Exception:
