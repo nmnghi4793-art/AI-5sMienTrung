@@ -72,9 +72,9 @@ def get_kho_display(id_kho):
     except Exception:
         name = None
     if name and str(name) != str(id_kho):
-        return f"{name} (`{id_kho}`)"
+        return f"{name} ({id_kho})"
     else:
-        return f"`{id_kho}`"
+        return f"{id_kho}"
 # === End helper kho display ===
 
 # ===== Scoring imports & ENV =====
@@ -906,9 +906,9 @@ async def ack_photo_progress(context: ContextTypes.DEFAULT_TYPE, chat_id: int, i
     date_text = d.strftime("%d/%m/%Y")
 
     if cur_count < REQUIRED_PHOTOS:
-        line = f"✅ Đã ghi nhận ảnh {cur_count}/{REQUIRED_PHOTOS} cho {ten_kho} (ID `{id_kho}`) - Ngày {date_text}."
+        line = f"✅ Đã ghi nhận ảnh {cur_count}/{REQUIRED_PHOTOS} cho {ten_kho} (ID {id_kho}) - Ngày {date_text}."
     else:
-        line = f"✅ ĐÃ ĐỦ {REQUIRED_PHOTOS}/{REQUIRED_PHOTOS} ảnh cho {ten_kho} (ID `{id_kho}`) - Ngày {date_text}. Cảm ơn bạn!"
+        line = f"✅ ĐÃ ĐỦ {REQUIRED_PHOTOS}/{REQUIRED_PHOTOS} ảnh cho {ten_kho} (ID {id_kho}) - Ngày {date_text}. Cảm ơn bạn!"
 
     state['lines'].append(line)
     text = "\n".join(state['lines'])
@@ -960,13 +960,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if id_kho not in kho_map:
         await update.effective_message.reply_text(
-            f"❌ ID `{id_kho}` *không có* trong danh sách. Kiểm tra lại!"
+            f"❌ ID {id_kho} *không có* trong danh sách. Kiểm tra lại!"
         )
         return
 
     cur = get_count(load_count_db(), id_kho, d)
     await update.effective_message.reply_text(
-        f"✅ Đã nhận ID `{id_kho}` ({kho_map[id_kho]}). Hôm nay hiện có *{cur} / {REQUIRED_PHOTOS}* ảnh. "
+        f"✅ Đã nhận ID {id_kho} ({kho_map[id_kho]}). Hôm nay hiện có *{cur} / {REQUIRED_PHOTOS}* ảnh. "
         "Gửi ảnh ngay sau đó (không cần caption)."
     )
 
@@ -1001,7 +1001,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if id_kho not in kho_map:
         await msg.reply_text(
-            f"❌ ID `{id_kho}` *không có* trong danh sách Excel. Kiểm tra lại!"
+            f"❌ ID {id_kho} *không có* trong danh sách Excel. Kiểm tra lại!"
         )
         return
 
