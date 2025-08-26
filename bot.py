@@ -1217,9 +1217,33 @@ def main():
     print("Bot is running...")
     app.run_polling(close_loop=False)
 
-if __name__ == "__main__":
-    main()
+import logging
+import time
+from telegram.error import NetworkError, TimedOut
 
+# Cấu hình log gọn, rõ
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+
+if __name__ == "__main__":
+    while True:
+        try:
+            # build_app() là hàm bạn đã có sẵn ở trên
+            app = build_app()
+            logging.info("Bot is running...")
+            # Giữ tham số như cũ để không thay đổi hành vi
+            app.run_polling(close_loop=False)
+
+        except (NetworkError, TimedOut) as e:
+            logging.error(f"Lỗi mạng: {e} → thử lại sau 5s")
+            time.sleep(5)  # retry sau 5 giây
+
+        except Exception as e:
+            # Bắt mọi lỗi ngoài ý muốn để bot không chết hẳn
+            logging.exception(f"Lỗi không mong đợi: {e} → thử lại sau 5s")
+            time.sleep(5)
 
 # ======= SIMPLE BANKS (ngắn gọn, dễ hiểu, 10–20 ý mỗi nhóm) =======
 SIMPLE_SIMPLE_ISSUE_BANK = {
