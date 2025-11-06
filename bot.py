@@ -210,6 +210,26 @@ def _dup_push(dup_key: str, phash: int, ngay_str: str):
 SCORING_BUFFER = defaultdict(list)  # key -> list[dict]
 SCORING_JOBS = {}
 
+
+def _schedule_scoring_job(context, chat_id:int, id_kho:str, ngay_str:str, text_md:str):
+    key = f"{chat_id}|{id_kho}|{ngay_str}"
+    rec = SCORING_JOBS.get(key, {})
+    last_text = rec.get("last_text")
+    if last_text == text_md:
+        return
+    old_job = rec.get("job")
+    if old_job:
+        try:
+            old_job.schedule_removal()
+        except Exception:
+            pass
+    job = context.job_queue.run_once(
+        _send_scoring_job, when=5,
+        data={"chat_id": chat_id, "text": compact_scoring_text(text_md)},
+        name=f"score_agg_{key}"
+    )
+    SCORING_JOBS[key] = {"job": job, "last_text": text_md}
+
 def _scoring_key(chat_id: int, id_kho: str, ngay_str: str) -> str:
     return f"{chat_id}|{id_kho}|{ngay_str}"
 
@@ -971,6 +991,23 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # === FAST PATH: pick medium photo size & download into memory ===
+    try:
+        sizes = message.photo or []
+        chosen = sizes[-2] if len(sizes) >= 2 else (sizes[-1] if sizes else None)
+        if chosen:
+            tg_file = await chosen.get_file()
+            from io import BytesIO
+            buf = BytesIO()
+            await tg_file.download_to_memory(out=buf)
+            buf.seek(0)
+            import numpy as np, cv2
+            _arr = np.frombuffer(buf.read(), dtype=np.uint8)
+            _img_bgr_fast = cv2.imdecode(_arr, cv2.IMREAD_COLOR)
+            if _img_bgr_fast is not None:
+                img_bgr = _img_bgr_fast
+    except Exception:
+        pass  # fallback to existing path below if any
     msg = update.effective_message
 
     # ---- ALBUM / MEDIA GROUP ----
@@ -1229,7 +1266,7 @@ def build_app() -> Application:
 def main():
     app = build_app()
     print("Bot is running...")
-    app.run_polling(close_loop=False)
+    app.run_polling(close_loop=False, drop_pending_updates=True)
 
 import logging
 import time
@@ -1248,7 +1285,7 @@ if __name__ == "__main__":
             app = build_app()
             logging.info("Bot is running...")
             # Giữ tham số như cũ để không thay đổi hành vi
-            app.run_polling(close_loop=False)
+            app.run_polling(close_loop=False, drop_pending_updates=True)
 
         except (NetworkError, TimedOut) as e:
             logging.error(f"Lỗi mạng: {e} → thử lại sau 5s")
