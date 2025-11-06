@@ -1183,6 +1183,17 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
             pass
 
 # ========= MAIN =========
+
+import re
+
+# Bỏ qua tin nhắn chỉ toàn số (bot sẽ im lặng, không phản hồi)
+async def ignore_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (update.effective_message.text or "").strip()
+    # Khớp chuỗi chỉ toàn số, có thể có khoảng trắng, dấu . hoặc , hoặc -
+    if re.fullmatch(r"\s*[\d\s.,-]+\s*", text):
+        return
+    # Không khớp -> để các handler khác xử lý
+
 def build_app() -> Application:
     token = os.getenv("BOT_TOKEN", "").strip()
     if not token:
@@ -1203,6 +1214,9 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("chatid", chatid))
     app.add_handler(CommandHandler("report_now", report_now))
     app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, photo_handler))
+    # Im lặng với tin nhắn chỉ toàn số
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r"^\s*[\d\s.,-]+\s*$"), ignore_numbers))
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     app.job_queue.run_daily(
